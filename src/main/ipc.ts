@@ -1,3 +1,4 @@
+import { documentsRuntimeDirectory } from './documents-profile.js';
 import { registerWorkspaceTerminalIpc } from './workspace-terminal-ipc.js';
 import { firefoxAddonUrl } from '../shared/firefox-addon.js';
 import { approvalCardView, requestApprovalAnswer } from './approval-wait.js';
@@ -573,6 +574,7 @@ async function buildState(): Promise<AppState> {
     bundledTunnelVersion: bundledVersion(),
     bridge: await bridgeStatus(),
     cosBrowserSignedIn: cosBrowserSignedIn(),
+    documentsRuntime: !!documentsRuntimeDirectory(),
     update: updateStatus(),
     desktopAccess: getMacOSDesktopAccess(),
     settingsRecovered: settingsRecovered()
@@ -1266,7 +1268,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     if (!ALLOWED_LINKS.has(url) && !safeExternalLink(url)) throw new Error('That link is not allowed');
     // Setup's ChatGPT and OpenAI pages open where the user is already signed in, unless the
     // user asked for their own browser instead.
-    if (!external && getConfig().ui.chatBrowser === 'cos' && opensInCosBrowser(url)) await openInPreferredBrowser(url, { reveal: true });
+    if (documentsRuntimeDirectory() && /^https?:/i.test(url) || !external && getConfig().ui.chatBrowser === 'cos' && opensInCosBrowser(url)) await openInPreferredBrowser(url, { reveal: true });
     else await shell.openExternal(url);
     return true;
   });

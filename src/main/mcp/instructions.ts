@@ -1,3 +1,4 @@
+import { documentsRuntimeDirectory, DOCUMENTS_INSTRUCTIONS } from '../documents-profile.js';
 /**
  * Server instructions advertised during MCP initialization. The client decides which
  * instructions reach the model; successful transport does not prove full prompt receipt.
@@ -47,6 +48,7 @@ function browserInstructions(): string {
 
 /** Same complete source as MCP initialization, evaluated when a user send is prepared. */
 export async function currentCoreInstructions(library?: SkillLibrary): Promise<string> {
+  if (documentsRuntimeDirectory()) return DOCUMENTS_INSTRUCTIONS;
   const skills = library ?? await listSkillLibrary();
   const config = getConfig();
   return serverInstructions(withManagedSkills({ roots: config.roots, caps: effectiveCapabilities(config),

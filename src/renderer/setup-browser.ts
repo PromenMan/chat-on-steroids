@@ -122,7 +122,14 @@ export function initBrowserSetup(actions: {
     const knownVersion = !!shownVersion && /^\d+\.\d+\.\d+$/.test(shownVersion);
     const outdated = knownVersion && isNewer(state.update.current, shownVersion!);
     ready = state.bridge.running && state.bridge.paired && (live || proof !== null) && knownVersion && !outdated;
-    if (!steered) phase = ready ? 'location' : 'extension';
+    if (state.documentsRuntime) {
+      ready = state.bridge.running && state.bridge.cosExtension?.present === true;
+      phase = 'location';
+    } else if (!steered) phase = ready ? 'location' : 'extension';
+    $('browserPhaseExtension').hidden = !!state.documentsRuntime;
+    $('browserBack').hidden = !!state.documentsRuntime;
+    $('browserReviewExtension').hidden = !!state.documentsRuntime;
+    $('useExtensionBrowser').hidden = !!state.documentsRuntime;
     const cos = browser === 'cos';
     $('browserExtensionStage').hidden = phase !== 'extension';
     $('browserLocationStage').hidden = phase !== 'location';
@@ -185,7 +192,7 @@ export function initBrowserSetup(actions: {
   $('browserBack').addEventListener('click', () => changePhase('extension'));
   $('browserReviewExtension').addEventListener('click', () => changePhase('extension'));
   $('useCosBrowser').addEventListener('click', () => actions.choose('cos'));
-  $('useExtensionBrowser').addEventListener('click', () => actions.choose(external));
+  $('useExtensionBrowser').addEventListener('click', () => { if (!current?.documentsRuntime) actions.choose(external); });
   for (const segment of document.querySelectorAll<HTMLButtonElement>('[data-external-browser]')) {
     segment.addEventListener('click', () => {
       external = segment.dataset.externalBrowser as ExternalBrowser;

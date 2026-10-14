@@ -504,6 +504,12 @@ export async function withSessionMutationFence<T>(
   return enqueueSessionOperation(entry, 'external policy fence', () => operation(entry.summary));
 }
 
+/** Snapshot the publication boundary, including revisions outside the visible timeline tail. */
+export async function sessionPublicationCursor(id: string): Promise<number> {
+  const entry = await ensureOpen(id);
+  return enqueueSessionOperation(entry, 'publication cursor', async () => entry.historySeq + 1);
+}
+
 /**
  * The summary is rewritten on a short delay rather than on every event. A long agent
  * session appends thousands of events; rewriting the summary for each one would turn

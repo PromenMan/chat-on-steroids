@@ -1,3 +1,4 @@
+import { documentsRuntimeDirectory } from './documents-profile.js';
 /**
  * Whether a newer Chat On Steroids has been published, and the file that becomes it.
  *
@@ -176,6 +177,7 @@ function set(next: Partial<UpdateStatus>): void {
  * alive, and the shutdown sequence does not have to know it exists.
  */
 export function startUpdateChecks(): void {
+  if (documentsRuntimeDirectory()) return;
   if (recheck) clearInterval(recheck);
   recheck = setInterval(() => void checkForUpdates(), RECHECK_MS);
   recheck.unref();
@@ -211,6 +213,7 @@ export function checkForUpdatesIfStale(now = Date.now()): Promise<void> {
  * from downloading the same installer twice.
  */
 export function checkForUpdates(): Promise<void> {
+  if (documentsRuntimeDirectory()) return Promise.resolve();
   if (pass) return pass;
   const run = runPass()
     .catch((err: Error) => {

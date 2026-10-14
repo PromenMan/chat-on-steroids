@@ -1,3 +1,5 @@
+import { readCompletedFinal, sessionPublicationCursor } from './session/store.js';
+import { getChatModels } from './chat-models.js';
 import { z } from 'zod';
 import type {
   ControlApiAgents,
@@ -278,7 +280,7 @@ async function sessionDetail(id: string, params: URLSearchParams): Promise<Contr
 
 // ---------------------------------------------------------------- events
 
-export function projectEvent(event: SessionEvent): ControlApiEvent {
+export function projectEvent(event: SessionEvent, textLimit = TEXT_CAP): ControlApiEvent {
   const base: ControlApiEvent = {
     seq: event.seq,
     // Where the row sits in history. A revised message keeps its first position but carries its
@@ -309,7 +311,7 @@ export function projectEvent(event: SessionEvent): ControlApiEvent {
       };
     }
     case 'assistant_message':
-      return { ...base, message: stored(event.message), messageId: event.messageId, final: event.final, state: event.state, resolvedModel: event.resolvedModel };
+      return { ...base, message: stored(event.message, textLimit), messageId: event.messageId, final: event.final, state: event.state, resolvedModel: event.resolvedModel };
     case 'native_image':
       return { ...base, previewStatus: event.previewStatus, width: event.width, height: event.height };
     case 'progress':
@@ -362,9 +364,9 @@ export function projectEvent(event: SessionEvent): ControlApiEvent {
 }
 
 /** One row that cannot be read must not take the rest of the page with it. */
-export function projectReadableEvent(event: SessionEvent): ControlApiEvent {
+export function projectReadableEvent(event: SessionEvent, textLimit = TEXT_CAP): ControlApiEvent {
   try {
-    return projectEvent(event);
+    return projectEvent(event, textLimit);
   } catch {
     return { seq: event.seq, position: event.seq, time: event.time, kind: event.kind, source: event.source, unreadable: true };
   }
@@ -376,6 +378,7 @@ async function sessionEvents(id: string, params: URLSearchParams): Promise<Contr
     before: integer(1, 10_000_000).optional(),
     after: integer(0, 10_000_000).optional(),
     limit: integer(1, MAX_EVENTS).optional(),
+    textLimit: integer(TEXT_CAP, 64_000).optional(),
     kinds: csv(keysOf(EVENT_KINDS)).optional()
   });
   // `from` follows live revisions; `before` and `after` page through history. They are two
@@ -383,10 +386,13 @@ async function sessionEvents(id: string, params: URLSearchParams): Promise<Contr
   if (query.from !== undefined && (query.before !== undefined || query.after !== undefined)) {
     throw new RequestError(400, 'invalid_query', 'from cannot be combined with before or after');
   }
+  if (query.textLimit && query.textLimit > TEXT_CAP && (query.limit ?? 50) > 10) {
+    throw new RequestError(400, 'invalid_query', 'expanded text requires limit <= 10');
+  }
   return heavy(async () => {
     const page = await readSessionEvents(id, { ...query, limit: query.limit ?? 50 });
     if (!page) throw new RequestError(404, 'session_not_found');
-    return { events: page.events.map(projectReadableEvent), total: page.total, nextFrom: page.nextFrom };
+    return { events: page.events.map(event => projectReadableEvent(event, query.textLimit)), total: page.total, nextFrom: page.nextFrom };
   });
 }
 
@@ -415,7 +421,7 @@ export function streamEvents(id: string, from: number, kinds: SessionEventKind[]
   return heavy(async () => {
     const page = await readSessionEvents(id, { from, limit: STREAM_PAGE, ...(kinds ? { kinds } : {}) });
     if (!page) throw new RequestError(404, 'session_not_found');
-    return { events: page.events.map(projectReadableEvent), total: page.total, nextFrom: page.nextFrom };
+    return { events: page.events.map(event => projectReadableEvent(event)), total: page.total, nextFrom: page.nextFrom };
   });
 }
 
@@ -544,6 +550,35 @@ const SESSION_ROUTE = /^\/v1\/sessions\/([0-9a-z-]{8,64})(\/events)?$/;
  * that ignore case, so only the exact spelling is a route.
  */
 export async function serveRead(route: string, params: URLSearchParams): Promise<unknown | undefined> {
+  const inputTurn = /^\/v1\/inputs\/([0-9a-f-]{36})\/turn$/.exec(route);
+  if (inputTurn) {
+    parseQuery(params, {});
+    const row = (await listInputs()).find(input => input.id === inputTurn[1] && input.purpose !== 'decision');
+    if (!row) throw new RequestError(404, 'input_not_found');
+    const sessionId = row.deliveredSessionId ?? row.sessionId;
+    const summary = sessionId ? await readSession(sessionId) : null;
+    const turns = Object.entries(summary?.timelineTurns ?? {}).filter(([, turn]) => row.messageId && turn.questionId === row.messageId);
+    const families = new Set(turns.map(([id, turn]) => turn.responseTurnId ?? id));
+    const ids = families.size === 1 && turns.length <= 64 ? turns.map(([id]) => id) : [];
+    const family = ids.length ? [...families][0] : undefined;
+    const final = family && sessionId && summary?.conversationId && deliveryProof(row) === 'sent'
+      ? await heavy(() => readCompletedFinal(sessionId, summary.conversationId!, family)) : null;
+    return { input: projectInput(row), turnIds: ids,
+      answer: final?.text && final.turnId && ids.includes(final.turnId)
+        ? { messageId: final.messageId, turnId: final.turnId, message: plain(final.text, 64_000) } : null,
+      activeTurnId: summary?.activeTurnId && ids.includes(summary.activeTurnId) ? summary.activeTurnId : null };
+  }
+  const cursor = /^\/v1\/sessions\/([0-9a-z-]{8,64})\/cursor$/.exec(route);
+  if (cursor) {
+    parseQuery(params, {});
+    if (!await readSession(cursor[1]!)) throw new RequestError(404, 'session_not_found');
+    return { nextFrom: await sessionPublicationCursor(cursor[1]!) };
+  }
+  if (route === '/v1/models') {
+    parseQuery(params, {});
+    const catalog = getChatModels();
+    return { state: catalog.state, models: catalog.models.map(({ id, label, efforts }) => ({ id, label, efforts })) };
+  }
   if (route === '/v1/sessions') return sessionList(params);
   if (route === '/v1/inputs') return inputs(params);
   if (route === '/v1/agents') {

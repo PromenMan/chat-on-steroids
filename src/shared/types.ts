@@ -764,6 +764,7 @@ export function browserExtensionRequired(_config: Pick<Config, 'sessions' | 'mul
 }
 
 export interface AppState {
+  documentsRuntime?: boolean;
   config: Config;
   status: ConnectionStatus;
   /**

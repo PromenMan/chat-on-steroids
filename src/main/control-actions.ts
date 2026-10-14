@@ -1,3 +1,8 @@
+import { loadCosBrowser } from './cos-browser/selection.js';
+import { stopSessionTurn } from './bridge.js';
+import { REASONING_EFFORTS } from '../shared/session.js';
+import { attachmentSchema, stageInputAttachments } from './session/input-attachments.js';
+import path from 'node:path';
 import { z } from 'zod';
 import { serveWorkerAction } from './control-workers.js';
 import type { ControlApiCancelResult, ControlApiSendResult } from '../shared/control-api.js';
@@ -44,6 +49,9 @@ const sendBody = z
     sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/).optional(),
     // The project a new chat starts in. An existing chat keeps the one it has.
     projectId: lowerUuid.optional(),
+    model: z.string().min(1).max(80).regex(/^[a-zA-Z0-9._-]+$/).optional(),
+    reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
+    attachments: z.array(attachmentSchema).max(20).optional(),
     text: z.string().max(MAX_TEXT).refine((value) => value.trim().length > 0, 'text is empty'),
     // Consent to a send that would stop the answer ChatGPT is writing right now.
     interrupt: z.boolean().optional()
@@ -57,7 +65,7 @@ const CANCEL_ROUTE = /^\/v1\/inputs\/([0-9a-f-]{36})\/cancel$/;
 
 /** Every path an action can arrive on, whatever the id, so one gate can refuse them all alike. */
 export function isActionPath(route: string): boolean {
-  return route === '/v1/inputs' || /^\/v1\/inputs\/[^/]+\/cancel$/.test(route) || /^\/v1\/workers\/[^/]+\/(spawn|message|ack)$/.test(route);
+  return route === '/v1/browser/open' || /^\/v1\/sessions\/[^/]+\/stop$/.test(route) || route === '/v1/attachments' || route === '/v1/inputs' || /^\/v1\/inputs\/[^/]+\/cancel$/.test(route) || /^\/v1\/workers\/[^/]+\/(spawn|message|ack)$/.test(route);
 }
 
 export interface ActionReply {
@@ -107,7 +115,7 @@ async function send(rawBody: unknown): Promise<ActionReply> {
   const existing = await find(body.id);
   if (existing) {
     // A new chat's first message is filed under its own id.
-    if (existing.purpose === 'decision' || existing.sessionId !== (body.sessionId ?? body.id) || existing.text !== text) {
+    if (existing.purpose === 'decision' || existing.sessionId !== (body.sessionId ?? body.id) || existing.text !== text || existing.model !== (body.model ?? null) || existing.reasoningEffort !== (body.reasoningEffort ?? null) || JSON.stringify(existing.attachments ?? []) !== JSON.stringify(body.attachments ?? [])) {
       throw new RequestError(409, 'id_conflict', 'this id belongs to a different message');
     }
     const replay: ControlApiSendResult = { input: projectInput(existing), replayed: true };
@@ -138,8 +146,9 @@ async function send(rawBody: unknown): Promise<ActionReply> {
     text,
     mode: 'auto',
     dueAt: Date.now(),
-    model: null,
-    reasoningEffort: null,
+    model: body.model ?? null,
+    reasoningEffort: body.reasoningEffort ?? null,
+    ...(body.attachments?.length ? { attachments: body.attachments } : {}),
     authoredSource: 'text'
   };
   // The switch can flip while the lookups above run; this is the last point before the outbox.
@@ -208,6 +217,27 @@ async function cancel(id: string, rawBody: unknown): Promise<ActionReply> {
 /** Undefined when the method and path are not an action. */
 export async function serveAction(method: string, route: string, body: unknown): Promise<ActionReply | undefined> {
   if (method !== 'POST') return undefined;
+  if (route === '/v1/attachments') {
+    const request = parse(z.object({ paths: z.array(z.string().min(1).max(4096).refine(path.isAbsolute)).min(1).max(20) }).strict(), body);
+    if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');
+    const retained = new Set((await listInputs()).flatMap(row => (row.attachments ?? []).map(file => file.id)));
+    return { status: 201, body: { attachments: await stageInputAttachments(request.paths, retained) } };
+  }
+  if (route === '/v1/browser/open') {
+    const request = parse(z.object({ url: z.string().url().max(16_384).refine(value => /^https:\/\//i.test(value)) }).strict(), body);
+    if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');
+    const browser = await loadCosBrowser();
+    await browser.open(request.url, { reveal: true });
+    return { status: 200, body: { opened: true } };
+  }
+  const stop = /^\/v1\/sessions\/([0-9a-z-]{8,64})\/stop$/.exec(route);
+  if (stop) {
+    const request = parse(z.object({ turnId: z.string().min(1).max(256) }).strict(), body);
+    await controllable(stop[1]!);
+    if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');
+    await stopSessionTurn(stop[1]!, request.turnId);
+    return { status: 200, body: { requested: true } };
+  }
   const worker = await serveWorkerAction(method, route, body, () => {
     if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');
   });

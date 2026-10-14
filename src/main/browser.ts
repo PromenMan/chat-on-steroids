@@ -1,3 +1,4 @@
+import { documentsRuntimeDirectory } from './documents-profile.js';
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +29,7 @@ export function installedSignInBrowsers(): Array<{ browser: ExternalChatBrowser;
 
 export async function openBrowserSignIn(browser: ExternalChatBrowser,
   options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'usable' | 'launch'> = {}): Promise<string> {
+  if (documentsRuntimeDirectory()) throw new Error('Sign in with email in the built-in Documents browser.');
   const platform = options.platform ?? process.platform;
   const usable = options.usable ?? (candidate => isExecutableBrowser(candidate, platform));
   for (const candidate of new Set(preferredBrowserCandidates(platform, options.env, options.home, browser))) {
@@ -274,6 +276,7 @@ export async function openInPreferredBrowser(
   const usable = options.usable ?? ((candidate: string) => isExecutableBrowser(candidate, platform));
   const launch = options.launch ?? launchCommand;
   const selected = options.browser ?? getConfig().ui.chatBrowser ?? 'chrome';
+  if (documentsRuntimeDirectory() && selected !== 'cos') throw new Error('Feldman Documents uses its built-in browser.');
   if (selected === 'cos') {
     // Loaded on demand, only when selected: the default extension path never loads it.
     const cosBrowser = await (await import('./cos-browser/selection.js')).loadCosBrowser();

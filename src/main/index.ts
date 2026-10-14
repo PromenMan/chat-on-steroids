@@ -1,3 +1,4 @@
+import { documentsRuntimeDirectory, watchDocumentsParent } from './documents-profile.js';
 import { stopInputStartup } from './session/start-input.js';
 import { browserExtensionRequired } from '../shared/types.js';
 import { requestSessionFinishGoal, setFinishNotifier } from './session/finish.js';
@@ -138,6 +139,10 @@ let shutdownComplete = false;
 const usageWarmup = new AbortController();
 
 // One instance only: two copies would fight over the tunnel and the config file.
+const documentsDirectory = documentsRuntimeDirectory();
+if (documentsDirectory) app.setPath('userData', documentsDirectory);
+const stopParentWatch = watchDocumentsParent(() => app.quit());
+app.once('before-quit', stopParentWatch);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   // `app.quit()` does not make the rest of this module stop executing. Mark this process as a

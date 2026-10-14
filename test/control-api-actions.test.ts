@@ -252,7 +252,7 @@ describe('with actions switched off', () => {
     expect(refused.status).toBe(403);
     expect(refused.continued).toBe(false);
     expect((await call('GET', '/v1/inputs')).status).toBe(200);
-    expect((await call('GET', '/v1/health')).body.actions).toEqual({ enabled: false, routes: ['POST /v1/inputs', 'POST /v1/inputs/{id}/cancel', 'POST /v1/workers/{ownerId}/spawn', 'POST /v1/workers/{ownerId}/message', 'POST /v1/workers/{ownerId}/ack'] });
+    expect((await call('GET', '/v1/health')).body.actions).toEqual({ enabled: false, routes: ['POST /v1/browser/open', 'POST /v1/sessions/{id}/stop', 'POST /v1/attachments', 'POST /v1/inputs', 'POST /v1/inputs/{id}/cancel', 'POST /v1/workers/{ownerId}/spawn', 'POST /v1/workers/{ownerId}/message', 'POST /v1/workers/{ownerId}/ack'] });
   });
 
   it('follows the switch on the next request without restarting the listener', async () => {
@@ -348,11 +348,11 @@ describe('the request body', () => {
       ['interrupt that is not a boolean', sendBody({ interrupt: 'yes' })],
       ['a mode', sendBody({ mode: 'finish' })],
       ['a delivery flag', sendBody({ delivery: 'tool' })],
-      ['a model', sendBody({ model: 'gpt-x' })],
+      ['a model', sendBody({ model: 'invalid / model' })],
       ['a due time', sendBody({ dueAt: 1 })],
       ['a project', sendBody({ projectId: randomUUID() })],
       ['images', sendBody({ images: [] })],
-      ['attachments', sendBody({ attachments: [] })]
+      ['attachments', sendBody({ attachments: [{ name: 'incomplete.pdf' }] })]
     ];
     for (const [name, body] of cases) {
       const reply = await post('/v1/inputs', body);
@@ -1085,5 +1085,52 @@ describe('logging', () => {
     expect(lines.some((message) => message.includes('admitted'))).toBe(true);
     expect(lines.some((message) => message.includes('cancelled'))).toBe(true);
     expect(lines.join('\n')).not.toContain(secret);
+  });
+});
+
+
+describe('Documents host protocol', () => {
+  it('retains the requested model and effort, and refuses a changed idempotent request', async () => {
+    const body = sendBody({ model: 'gpt-6', reasoningEffort: 'high' });
+    expect((await post('/v1/inputs', body)).status).toBe(202);
+    expect((await outbox()).find(row => row.id === body.id)).toMatchObject({ model: 'gpt-6', reasoningEffort: 'high' });
+    expect((await post('/v1/inputs', body)).body.replayed).toBe(true);
+    expect((await post('/v1/inputs', { ...body, reasoningEffort: 'medium' })).status).toBe(409);
+  });
+  it('stages local attachments through the native upload owner', async () => {
+    const file = path.join(dir, 'exam.pdf');
+    await fs.writeFile(file, '%PDF-1.4\nexam');
+    const staged = await post('/v1/attachments', { paths: [file] });
+    expect(staged.status).toBe(201);
+    expect(staged.body.attachments[0]).toMatchObject({ name: 'exam.pdf', mimeType: 'application/pdf' });
+    const body = sendBody({ attachments: staged.body.attachments });
+    expect((await post('/v1/inputs', body)).status).toBe(202);
+    expect((await outbox()).find(row => row.id === body.id)?.attachments).toEqual(staged.body.attachments);
+    expect((await post('/v1/inputs', { ...body, attachments: [] })).status).toBe(409);
+  });
+});
+
+
+describe('exact input response ownership', () => {
+  it('uses the recorded native question UUID even when the question had no turn id', async () => {
+    const own = await makeSession('Owned input', 'own-question-chat');
+    const entry = row({ sessionId: own, conversationId: 'own-question-chat', state: 'sent', messageId: 'native-question', deliveredAt: 5 });
+    await seed([entry]);
+    await appendEvent(own, { kind: 'user_message', source: 'extension', time: 10, messageId: 'native-question', message: text('Question') });
+    await appendEvent(own, { kind: 'turn_start', source: 'extension', time: 11, turnId: 'answer-owned' });
+    const reply = await call('GET', `/v1/inputs/${entry.id}/turn`);
+    expect(reply.status).toBe(200);
+    expect(reply.body.turnIds).toEqual(['answer-owned']);
+    await appendEvent(own, { kind: 'assistant_message', source: 'extension', time: 11, messageId: 'interim',
+      turnId: 'answer-owned', final: false, message: text('Still working') });
+    await appendEvent(own, { kind: 'turn_end', source: 'extension', time: 11, turnId: 'answer-owned', outcome: 'completed' });
+    expect((await call('GET', `/v1/inputs/${entry.id}/turn`)).body.answer).toBeNull();
+    await appendEvent(own, { kind: 'assistant_message', source: 'extension', time: 11, messageId: 'final-answer',
+      turnId: 'answer-owned', final: true, state: 'final', message: text('Actual answer') });
+    expect((await call('GET', `/v1/inputs/${entry.id}/turn`)).body.answer).toMatchObject({
+      turnId: 'answer-owned', message: { text: 'Actual answer', truncated: false } });
+    await appendEvent(own, { kind: 'user_message', source: 'extension', time: 12, messageId: 'other-question', message: text('Different question') });
+    await appendEvent(own, { kind: 'turn_start', source: 'extension', time: 13, turnId: 'answer-other' });
+    expect((await call('GET', `/v1/inputs/${entry.id}/turn`)).body.turnIds).toEqual(['answer-owned']);
   });
 });

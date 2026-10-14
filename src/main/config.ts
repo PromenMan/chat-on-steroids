@@ -1,3 +1,4 @@
+import { documentsProfile } from './documents-profile.js';
 import { DEFAULT_HELPER_CHAT_MODEL, SUPERSEDED_HELPER_CHAT_MODELS } from '../shared/chat-models.js';
 import { UI_LANGUAGES } from '../shared/ui-language.js';
 import { DEFAULT_RECORDING_STORAGE_GIB, REASONING_EFFORTS, RECORDING_STORAGE_LIMITS_GIB, type RecordingStorageLimitGiB } from '../shared/session.js';
@@ -776,7 +777,7 @@ function adoptWiderWindow(config: Config): Config {
 }
 
 export function getConfig(): Config {
-  return current;
+  return documentsProfile(current);
 }
 
 /**
@@ -825,7 +826,7 @@ export function updateConfig(
   const operation = mutationQueue.then(async () => {
     const previous = current;
     // Validate before reserving external resources. The optional publisher owns their rollback.
-    const proposed = configSchema.parse(await update(previous));
+    const proposed = configSchema.parse(documentsProfile(await update(previous)));
     const persist = () => persistConfig(proposed);
     const next = await (publish ? publish(proposed, previous, persist) : persist());
     // Keep dependent durable retirement inside the same settings transaction;

@@ -12,11 +12,14 @@ export const CONTROL_API_PROTOCOL = 1;
 export const CONTROL_API_ROUTES = [
   '/v1/health',
   '/v1/status',
+  '/v1/models',
   '/v1/sessions',
   '/v1/sessions/{id}',
+  '/v1/sessions/{id}/cursor',
   '/v1/sessions/{id}/events',
   '/v1/sessions/{id}/events/stream',
   '/v1/inputs',
+  '/v1/inputs/{id}/turn',
   '/v1/agents',
   '/v1/workers/{ownerId}',
   '/v1/workers/{ownerId}/reports',
@@ -27,7 +30,7 @@ export const CONTROL_API_ROUTES = [
  * Routes that change something. They are served only while the user has also switched on
  * `controlApi.allowActions`, and are listed apart from `CONTROL_API_ROUTES` for that reason.
  */
-export const CONTROL_API_ACTION_ROUTES = ['POST /v1/inputs', 'POST /v1/inputs/{id}/cancel',
+export const CONTROL_API_ACTION_ROUTES = ['POST /v1/browser/open', 'POST /v1/sessions/{id}/stop', 'POST /v1/attachments', 'POST /v1/inputs', 'POST /v1/inputs/{id}/cancel',
   'POST /v1/workers/{ownerId}/spawn', 'POST /v1/workers/{ownerId}/message', 'POST /v1/workers/{ownerId}/ack'] as const;
 
 /** Written to `userData/control-api/endpoint.json` while the listener is up. */

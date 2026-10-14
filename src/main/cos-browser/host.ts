@@ -1,3 +1,4 @@
+import { documentsRuntimeDirectory } from '../documents-profile.js';
 /**
  * The CoS browser: app-owned Chromium windows that run the companion extension unchanged.
  *
@@ -609,7 +610,8 @@ export class CosBrowser {
     this.popup = popup;
     popup.on('blur', () => { if (!popup.isDestroyed()) popup.destroy(); });
     popup.on('closed', () => { if (this.popup === popup) this.popup = null; });
-    popup.webContents.setWindowOpenHandler(({ url }) => { void shell.openExternal(url); return { action: 'deny' }; });
+    popup.webContents.setWindowOpenHandler(({ url }) => { if (documentsRuntimeDirectory()) void this.open(url, { reveal: true });
+      else void shell.openExternal(url); return { action: 'deny' }; });
     // The companion's own page, not a website: it stays put, as the app-wide guard keeps every other.
     popup.webContents.on('will-navigate', event => event.preventDefault());
     popup.webContents.on('will-redirect', event => event.preventDefault());
@@ -653,7 +655,7 @@ export class CosBrowser {
     });
     contents.setWindowOpenHandler(({ url }) => {
       if (isGoogleSignIn(url)) this.googleSignIn(contents);
-      else if (opensInCosBrowser(url)) {
+      else if (opensInCosBrowser(url) || documentsRuntimeDirectory() && /^https?:/i.test(url)) {
         // ChatGPT, OpenAI and sign-in links open as tabs of this browser, beside their opener.
         const windowId = this.model.tab(id)?.windowId;
         if (windowId !== undefined) this.control.createTab(windowId, url, { active: true, openerTabId: id });
@@ -676,6 +678,11 @@ export class CosBrowser {
    * the one already open. Only one sign-in runs at a time: another tab's click shows that one.
    */
   private googleSignIn(contents: WebContents): void {
+    if (documentsRuntimeDirectory()) {
+      // Never silently launch Chrome. Return to the provider's supported email sign-in.
+      void contents.loadURL(LOGIN_URL);
+      return;
+    }
     const tabId = contents.id;
     const windowId = this.model.tab(tabId)?.windowId;
     const frame = windowId === undefined ? undefined : this.frames.get(windowId);
@@ -764,6 +771,7 @@ export class CosBrowser {
    * so a fast extension click finds it; opening again keeps the same offer for the same browser.
    */
   private async launchSignIn(panel: SignInPanel, browser: ExternalChatBrowser): Promise<void> {
+    if (documentsRuntimeDirectory()) return;
     const ses = this.ses;
     const epoch = this.browserEpoch;
     const contents = panel.contents;

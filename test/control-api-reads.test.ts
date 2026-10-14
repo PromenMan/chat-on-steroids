@@ -129,9 +129,9 @@ describe('read routes', () => {
   it('are listed by health and need the token like every other route', async () => {
     const health = await call('/v1/health');
     expect(health.body.routes).toEqual([
-      '/v1/health', '/v1/status', '/v1/sessions', '/v1/sessions/{id}', '/v1/sessions/{id}/events', '/v1/sessions/{id}/events/stream', '/v1/inputs', '/v1/agents', '/v1/workers/{ownerId}', '/v1/workers/{ownerId}/reports', '/v1/log'
+      '/v1/health', '/v1/status', '/v1/models', '/v1/sessions', '/v1/sessions/{id}', '/v1/sessions/{id}/cursor', '/v1/sessions/{id}/events', '/v1/sessions/{id}/events/stream', '/v1/inputs', '/v1/inputs/{id}/turn', '/v1/agents', '/v1/workers/{ownerId}', '/v1/workers/{ownerId}/reports', '/v1/log'
     ]);
-    for (const route of ['/v1/sessions', `/v1/sessions/${sessionId}`, `/v1/sessions/${sessionId}/events`, '/v1/inputs', '/v1/agents', '/v1/log']) {
+    for (const route of ['/v1/models', '/v1/sessions', `/v1/sessions/${sessionId}`, `/v1/sessions/${sessionId}/cursor`, `/v1/sessions/${sessionId}/events`, '/v1/inputs', '/v1/agents', '/v1/log']) {
       expect((await call(route, {})).status).toBe(401);
       expect((await call(route)).status).toBe(200);
     }
@@ -1004,5 +1004,19 @@ describe('the deadline on reads', () => {
     controlApi.setReadDeadlineForTests(5_000);
     expect((await call('/v1/inputs')).status).toBe(200);
     expect((await call(events())).status).toBe(200);
+  });
+});
+
+
+describe('expanded Documents answers', () => {
+  it('keeps the ordinary read cap and permits a bounded full answer page', async () => {
+    await appendEvent(sessionId, { kind: 'assistant_message', source: 'extension', time: Date.now(), messageId: 'long-answer', final: true, message: text('a'.repeat(6000)) });
+    const ordinary = await call(`/v1/sessions/${sessionId}/events?kinds=assistant_message&limit=1`);
+    expect(ordinary.body.events[0].message).toMatchObject({ text: 'a'.repeat(4000), truncated: true });
+    const full = await call(`/v1/sessions/${sessionId}/events?kinds=assistant_message&limit=1&textLimit=64000`);
+    expect(full.body.events[0].message).toMatchObject({ text: 'a'.repeat(6000), truncated: false });
+    expect((await call(`/v1/sessions/${sessionId}/events?limit=50&textLimit=64000`)).status).toBe(400);
+    const cursor = (await call(`/v1/sessions/${sessionId}/cursor`)).body.nextFrom;
+    expect((await call(`/v1/sessions/${sessionId}/events?from=${cursor}`)).body.events).toEqual([]);
   });
 });
