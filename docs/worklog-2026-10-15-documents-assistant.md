@@ -27,16 +27,29 @@ app-owned WebView handles sign-in with the existing native PKCE/loopback exchang
 - Broad suite: 8,958 passed, 49 skipped, 11 failed. Rechecking the nine failed suites with
   the child PowerShell process execution policy corrected gave 205 passed and two failures.
   The unavailable npm shim and updater stalled-stream test also fail against unchanged
-  upstream code in this environment. No native control implementation was changed.
+  upstream code in this environment. After supplying a correctly laid-out local npm
+  launcher, the shim test passed. The updater fixture remains a baseline failure.
+  No native control implementation was changed.
 - The normal verify command stops at pre-existing public-history privacy findings.
   History was preserved. Third-party notice/native-source checks passed; notices were
   regenerated to match the installed lockfile versions.
 - Electron Windows x64 packaging and its packaged native-module smoke checks passed.
   A live private-profile check started the packaged runtime, opened an HTTPS page using
   its embedded browser, and verified exit after its owning helper ended.
-- Companion checks: 140 Python tests, two Qt CTest cases, 252 Android unit tests, and
+- Companion checks: 140 Python tests, two Qt CTest cases, 262 Android unit tests, and
   two Android emulator browser instrumentation tests passed. Both application builds
-  succeeded. The desktop settings page was rendered and visually inspected.
+  succeeded. The desktop settings page was rendered and visually inspected. The Windows
+  installer compiled successfully. Android includes the separate note-context/navigation
+  work through `854de10`, merged into the isolated assistant branch and checked again.
+- The real Electron synthetic sign-in fixture passed with OpenSSL on PATH, including
+  Documents mode rejecting the Google handoff and returning to email login with no
+  external-browser launch or pending transfer offer.
+- Full Electron UI run: 51 of 54 passed initially. The missing-OpenSSL sign-in fixture
+  and a transient settings glyph-alignment assertion passed on separate reruns, for
+  53 of 54 checks passing overall. The general workspace-terminal fixture still times
+  out waiting for persisted child-shell output on this Windows environment. Terminal
+  implementation was not changed; general shell capabilities are disabled in the
+  Documents profile. This remains a verification limitation, not a passing check.
 
 Signed-in ChatGPT answer delivery and the user's physical Android device still require
 acceptance with the user's account. A package build is not evidence of those flows.

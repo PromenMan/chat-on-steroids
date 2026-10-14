@@ -244,6 +244,22 @@ app.whenReady().then(async () => {
   await waitFor('the popup tab to show ChatGPT login', () => host.signIn === null && popup.getURL() === 'https://chatgpt.com/auth/login' && !popup.isLoading());
   assert.equal(cosSignInTransfer.pending(), null);
   assert.equal(seen.filter(request => request.host === 'accounts.google.com').length, 0, 'Google was requested');
+
+  // Documents has no external-browser handoff. Exercise the production redirect listener
+  // against the same synthetic network, with the launch boundary still recorded above.
+  process.env.FELDMAN_DOCUMENTS_RUNTIME_DIR = path.join(fixture, 'documents-runtime');
+  const launchesBeforeDocuments = launched.length;
+  const redirectsBeforeDocuments = seen.filter(request => request.host === 'auth.openai.com' && request.path === '/google').length;
+  await popup.executeJavaScript(`document.getElementById('google').click()`, true);
+  await waitFor('Documents sign-in redirect request', () =>
+    seen.filter(request => request.host === 'auth.openai.com' && request.path === '/google').length > redirectsBeforeDocuments);
+  await waitFor('Documents email login after the blocked Google redirect', () =>
+    popup.getURL() === 'https://chatgpt.com/auth/login' && !popup.isLoading());
+  assert.equal(host.signIn, null, 'Documents offered an external browser');
+  assert.equal(launched.length, launchesBeforeDocuments, 'Documents launched an external browser');
+  assert.equal(cosSignInTransfer.pending(), null, 'Documents created an external sign-in offer');
+  assert.equal(seen.filter(request => request.host === 'accounts.google.com').length, 0);
+  delete process.env.FELDMAN_DOCUMENTS_RUNTIME_DIR;
   host.stop();
   siteServer.close();
   proxyServer.close();
@@ -310,6 +326,7 @@ app.whenReady().then(async () => {
     'nothing launched before the choice; one launch and one offer after it',
     'transfer imports an httpOnly secure cookie, closes the panel and ChatGPT receives the session',
     'Google popup tab gets ChatGPT login under the card, kept on cancel',
+    'Documents Google redirect returns to email login without external browser or transfer offer',
     'English permission denial', 'Portuguese transfer receipt', 'popup wrapping'], screenshots }));
   app.exit(0);
 }).catch(error => { clearTimeout(deadline); console.error(error.stack); app.exit(1); });
