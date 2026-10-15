@@ -122,18 +122,22 @@ app.whenReady().then(async () => {
     // animates in first; opening a terminal must leave the keyboard in it.
     await js('Promise.race([Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().endTime !== Infinity).map(animation => animation.finished.catch(() => undefined))), new Promise(resolve => setTimeout(resolve, 1500))])');
     await until(`!!document.activeElement?.closest('#workspaceTerminal .xterm')`);
-    win.webContents.insertText(sh.proof);
-    // insertText and sendInputEvent take different input paths, so Return could reach the shell
-    // first: an empty Enter, then the command typed but never sent (macOS CI, 2026-10-03). Send
-    // Return only once the shell has echoed the text.
-    await until(`(outputs[${JSON.stringify(first)}]||'').replace(/\\x1b\\[[0-9;?]*[ -\\/]*[@-~]/g,'').includes('persisted')`);
-    if (WINDOWS) {
-      // On Windows this Electron build accepts insertText but drops sendInputEvent's
-      // Return before it produces a DOM key event. Dispatch through Chromium to this
-      // owned window; xterm, IPC, ConPTY and the command-output assertions stay real.
-      const input = win.webContents.debugger;
+    const input = WINDOWS ? win.webContents.debugger : null;
+    if (input) {
       input.attach('1.3');
-      try {
+      // OS foreground ownership can suppress keys even while the textarea retains
+      // DOM focus. Pin focus only in this fixture's renderer, without global input.
+      await input.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
+    }
+    try {
+      // Keep Windows text and Return on one ordered Chromium input connection.
+      // Mixing insertText with another event path can let Return overtake the paste.
+      if (input) await input.sendCommand('Input.insertText', { text: sh.proof });
+      else win.webContents.insertText(sh.proof);
+      // A partial echo containing 'persisted' is too early: wait for the command's tail.
+      const echoedTail = WINDOWS ? '-Leaf))' : 'persisted';
+      await until(`(outputs[${JSON.stringify(first)}]||'').replace(/\\x1b\\[[0-9;?]*[ -\\/]*[@-~]/g,'').includes(${JSON.stringify(echoedTail)})`);
+      if (input) {
         await input.sendCommand('Input.dispatchKeyEvent', {
           type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13,
           text: '\r', unmodifiedText: '\r'
@@ -141,12 +145,18 @@ app.whenReady().then(async () => {
         await input.sendCommand('Input.dispatchKeyEvent', {
           type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13
         });
-      } finally { input.detach(); }
-    } else {
-      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
-      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+      } else {
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+      }
+      // Keep the input session alive until its key has crossed the renderer/PTY boundary.
+      await until(`outputs[${JSON.stringify(first)}]?.includes('PROOF_persisted_child')`);
+    } finally {
+      if (input) {
+        try { await input.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false }); }
+        finally { input.detach(); }
+      }
     }
-    await until(`outputs[${JSON.stringify(first)}]?.includes('PROOF_persisted_child')`);
     assert.ok(await js(`(()=>{const tab=document.querySelector('#workspaceTerminal .terminal-tab').getBoundingClientRect();const plus=document.querySelector('#workspaceTerminal .work-dock-add summary').getBoundingClientRect();return plus.left-tab.right<=12&&plus.left>=tab.right})()`));
     await js("document.querySelector('#workspaceTerminal .work-dock-add summary').click()");
     assert.equal(await js("document.querySelector('#workspaceTerminal .work-dock-add').open"), true);

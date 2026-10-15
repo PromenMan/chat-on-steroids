@@ -20,36 +20,58 @@ Android uses the native Documents client for on-device inference and optional lo
 read-only library tools. It does not run Electron or require this desktop runtime. Its
 app-owned WebView handles sign-in with the existing native PKCE/loopback exchange.
 
-## Validation on Windows, 2026-10-15
+## Continued implementation, 2026-10-15
 
-- TypeScript checking and 123 focused profile/control API tests passed after the final
-  answer-ownership change. Adjacent browser tests passed earlier.
-- Broad suite: 8,958 passed, 49 skipped, 11 failed. Rechecking the nine failed suites with
-  the child PowerShell process execution policy corrected gave 205 passed and two failures.
-  The unavailable npm shim and updater stalled-stream test also fail against unchanged
-  upstream code in this environment. After supplying a correctly laid-out local npm
-  launcher, the shim test passed. The updater fixture remains a baseline failure.
-  No native control implementation was changed.
-- The normal verify command stops at pre-existing public-history privacy findings.
-  History was preserved. Third-party notice/native-source checks passed; notices were
-  regenerated to match the installed lockfile versions.
-- Electron Windows x64 packaging and its packaged native-module smoke checks passed.
-  A live private-profile check started the packaged runtime, opened an HTTPS page using
-  its embedded browser, and verified exit after its owning helper ended.
-- Companion checks: 140 Python tests, two Qt CTest cases, 262 Android unit tests, and
-  two Android emulator browser instrumentation tests passed. Both application builds
-  succeeded. The desktop settings page was rendered and visually inspected. The Windows
-  installer compiled successfully. Android includes the separate note-context/navigation
-  work through `854de10`, merged into the isolated assistant branch and checked again.
-- The real Electron synthetic sign-in fixture passed with OpenSSL on PATH, including
-  Documents mode rejecting the Google handoff and returning to email login with no
-  external-browser launch or pending transfer offer.
-- Full Electron UI run: 51 of 54 passed initially. The missing-OpenSSL sign-in fixture
-  and a transient settings glyph-alignment assertion passed on separate reruns, for
-  53 of 54 checks passing overall. The general workspace-terminal fixture still times
-  out waiting for persisted child-shell output on this Windows environment. Terminal
-  implementation was not changed; general shell capabilities are disabled in the
-  Documents profile. This remains a verification limitation, not a passing check.
+Merged canonical upstream through `96619a7a` (2.1.38), desktop through `60af1cf`, and
+Android through `0740dcd`, preserving existing local feature work and original authorship.
+The Documents profile keeps upstream automatic turn rotation off because the helper owns
+its request lifecycle. Stop now uses upstream's exact-turn handler and typed live response.
+
+Settings recovery downloads and default plugin OAuth previously could call the system
+browser directly. `profile-web-link.ts` applies the Documents browser policy to these paths;
+ordinary upstream installations retain their existing system-browser behavior. Unit and IPC
+regressions cover recovery links, explicit external requests, authorization URLs, unsupported
+protocols, and the unchanged ordinary profile.
+
+The earlier history finding cleared when canonical upstream refs were fetched. No history
+was rewritten and no guard was weakened. The updater failure was a test-order race: the
+preceding retry test waited for a release lookup but left its download running before moving
+fake timers and replacing fetch mocks. Joining that pass fixes the full updater suite.
+
+The Windows terminal fixture typed its command but keys could be suppressed by foreground
+ownership despite retained DOM focus. It now pins focus only in its own renderer, sends text
+and Return through one ordered Chromium input connection, and waits for the command's full
+echo and PTY result before releasing that connection. Actual xterm, IPC and ConPTY remain in
+the path; persistent state, hidden panels, Ctrl+C and exit-code assertions remain intact.
+The corrected fixture passed consecutive runs without retries.
+
+The latest desktop note renderer compiled but failed at startup because its page `layer`
+property overrode a final Qt property. Renaming it `pictureLayer` restores startup. A new
+Windows CTest loads the actual application and renders a frame, so runtime QML load errors
+are checked in addition to compilation.
+
+## Current Windows validation
+
+- Full `npm run verify` passed: 9,067 tests plus 28 Windows desktop/shutdown tests, with
+  49 optional/platform tests skipped. Privacy, notices, native source checks and typecheck
+  pass within that command. The previously failing updater suite passes all 51 tests.
+- All 54 Electron UI checks have passing coverage across the full run and targeted reruns.
+  The initial full run passed 52/54: a settings-focus visual timing assertion passed its
+  separate rerun, and the terminal fixture passed two consecutive runs after the focus fix.
+  Initial failures remain recorded; this is not a claim that the first full run was green.
+- Electron Windows x64 2.1.38 packaging and native-module smoke checks passed. A real
+  private-profile runtime started, opened HTTPS in its embedded browser, and exited after
+  its owning helper ended. The synthetic sign-in fixture includes Documents mode returning
+  a Google redirect to email login without an external launch or transfer offer.
+- Desktop release compilation and all three Qt CTest cases pass. The staged application
+  starts and its settings screenshot was visually inspected after the QML fix. The updated
+  Windows installer compiled successfully. The existing 140 Python tests passed; these
+  sources were unchanged by the latest merges.
+- Android debug APK builds with all 263 unit tests passing. Both current WebView
+  instrumentation tests pass on an Android 15 emulator, including a real ephemeral callback.
+  The test-owned emulator was stopped afterward; the production APK was not installed.
 
 Signed-in ChatGPT answer delivery and the user's physical Android device still require
-acceptance with the user's account. A package build is not evidence of those flows.
+acceptance with the user's account. A build or synthetic sign-in fixture is not evidence of
+those flows. The desktop app changes remain on its local feature branch, as do Android's;
+the CoS integration branch is published in the PromenMan fork.
