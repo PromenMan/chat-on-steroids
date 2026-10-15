@@ -20,6 +20,21 @@ reset or external-browser launch. Existing synthetic email acceptance, rejection
 persistence and logout checks also passed. These checks do not prove that OpenAI or Google
 accepts a real account in the embedded browser; live user retry remains required.
 
+## Live PC acceptance
+
+The user completed sign-in manually. The built-in browser then showed the signed-in ChatGPT
+account and the paired companion. Opening this Documents-owned runtime's main window triggered
+passive discovery of the account's actual GPT-6 and GPT-5.6 choices. A fresh request through the
+CoS local control API returned exactly `COS OK`; the native ChatGPT plan client was not used,
+and no note content or tool calls were part of that test. Documents observed the CoS catalog
+and selected its GPT-6 model in a new conversation, preserving earlier chat history.
+
+Plain CoS chat transport is therefore verified on the PC. The document-tools connector is a
+separate remaining setup step: its local plugin is loaded, but the tunnel is unconfigured and
+MCP surfaces remain disconnected. The OpenAI Platform login was opened in the built-in browser
+for the user to complete; no credential was created or account permission granted by the agent.
+The Android port limitation below still applies.
+
 The separate native ChatGPT connection on the PC and physical Android tablet returned real
 answers. Android remains a native Documents client using the account's plan; this is not a
 completed Android port of the CoS runtime. Physical stylus testing confirmed immediate note
