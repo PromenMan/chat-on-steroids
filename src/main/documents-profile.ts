@@ -13,7 +13,7 @@ export function documentsProfile(config: Config): Config {
     ...config,
     capabilities: Object.fromEntries(Object.keys(config.capabilities).map(key => [key, false])) as Config['capabilities'],
     multiAgent: { ...config.multiAgent, enabled: false },
-    ui: { ...config.ui, chatBrowser: 'cos', autoConnect: false, startAtLogin: false, mentionCore: false },
+    ui: { ...config.ui, chatBrowser: 'cos', autoConnect: false, startAtLogin: false, mentionCore: false, rotateTurnMinutes: 0 },
     controlApi: { enabled: true, allowActions: true }
   };
 }

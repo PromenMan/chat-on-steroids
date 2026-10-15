@@ -1,4 +1,5 @@
 import { documentsRuntimeDirectory } from './documents-profile.js';
+import { openProfileWebLink } from './profile-web-link.js';
 import { registerWorkspaceTerminalIpc } from './workspace-terminal-ipc.js';
 import { forgetSurfaceTokens } from './mcp/persistent-paths.js';
 import { firefoxAddonUrl } from '../shared/firefox-addon.js';
@@ -1252,7 +1253,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   // avoids closing the app for no reason.
   // Update all. A downloaded update restarts only for the exact version the person approved in
   // the app's own dialog; any other call answers `confirm`, so the window can ask first.
-  handle('update:all', async payload => updateAll(quitToInstall, url => shell.openExternal(url),
+  handle('update:all', async payload => updateAll(quitToInstall, openProfileWebLink,
     async version => typeof payload === 'string' && payload === version));
   handle('update:install', async () => {
     if (!markInstallOnQuit()) throw new Error('There is no downloaded update to install yet');
@@ -1272,7 +1273,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   });
 
   handle('update:download', async () => {
-    await shell.openExternal(manualDownloadUrl(updateStatus().latest));
+    await openProfileWebLink(manualDownloadUrl(updateStatus().latest));
     return true;
   });
 
@@ -1282,7 +1283,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     // Setup's ChatGPT and OpenAI pages open where the user is already signed in, unless the
     // user asked for their own browser instead.
     if (documentsRuntimeDirectory() && /^https?:/i.test(url) || !external && getConfig().ui.chatBrowser === 'cos' && opensInCosBrowser(url)) await openInPreferredBrowser(url, { reveal: true });
-    else await shell.openExternal(url);
+    else await openProfileWebLink(url);
     return true;
   });
 
@@ -1709,7 +1710,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('bridge:downloadExtension', async () => {
     // This is a recovery path for the extension bundled with *this installed app*. Never use
     // releases/latest here: an old app must not fetch a newer extension with a newer protocol.
-    await shell.openExternal(extensionDownloadUrl(app.getVersion()));
+    await openProfileWebLink(extensionDownloadUrl(app.getVersion()));
     return true;
   });
 

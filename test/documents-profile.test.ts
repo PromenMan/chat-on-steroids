@@ -14,6 +14,7 @@ describe('Documents runtime ownership', () => {
     vi.stubEnv('FELDMAN_DOCUMENTS_RUNTIME_DIR', 'C:/Documents/assistant/cos-runtime');
     const profile = documentsProfile(config);
     expect(profile.ui.chatBrowser).toBe('cos');
+    expect(profile.ui.rotateTurnMinutes).toBe(0);
     expect(Object.values(profile.capabilities).some(Boolean)).toBe(false);
     expect(profile.multiAgent.enabled).toBe(false);
     expect(profile.controlApi).toEqual({ enabled: true, allowActions: true });

@@ -1319,6 +1319,22 @@ describe('every link the window offers', () => {
     }
   });
 
+  it('keeps Documents download recovery and explicitly external web links in its embedded browser', async () => {
+    vi.stubEnv('FELDMAN_DOCUMENTS_RUNTIME_DIR', 'documents-runtime');
+    vi.mocked(openInPreferredBrowser).mockClear();
+    vi.mocked(shell.openExternal).mockClear();
+    try {
+      for (const channel of ['update:download', 'bridge:downloadExtension']) {
+        expect(await handlers.get(channel)!(null, undefined)).toEqual({ ok: true, data: true });
+      }
+      expect(await handlers.get('link:open')!(null, {
+        url: 'https://platform.openai.com/settings/organization/tunnels', external: true
+      })).toEqual({ ok: true, data: true });
+      expect(openInPreferredBrowser).toHaveBeenCalledTimes(3);
+      expect(shell.openExternal).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("hands Setup's extensions address over by clipboard, because browsers ignore their own pages from outside", async () => {
     const { clipboard } = await import('electron');
     const write = vi.spyOn(clipboard, 'writeText');

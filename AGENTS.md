@@ -2096,6 +2096,15 @@ browser (`src/main/cos-browser`). Existing and new configs keep `chrome` until t
 Settings. `syncCosBrowser()` starts it after the bridge listens (the extension looks for the app
 as soon as it loads), stops it when another browser is chosen, and the app stops it on quit.
 
+The Feldman Documents bundle selects a separate profile with
+`FELDMAN_DOCUMENTS_RUNTIME_DIR` before the instance lock. `documents-profile.ts` owns
+its forced embedded browser, disabled coding capabilities/workers/turn rotation and
+helper-PID lifetime; upstream self-updates stay off. `profile-web-link.ts` routes settings,
+recovery downloads and plugin authorization into that browser in this profile, while
+ordinary installations retain their system-browser behavior. Google sign-in returns to
+email login here instead of offering an external handoff. These rules do not change the
+outbox, recorder or exact native answer-ownership authorities.
+
 - **Session.** One persistent partition (`persist:cos-browser`). Its windows are `BaseWindow`s
   with a toolbar view and one `WebContentsView` per tab; they live in the tray, and closing one
   hides it. Minimizing is an ordinary minimize: the window stays in the taskbar/Dock, and the

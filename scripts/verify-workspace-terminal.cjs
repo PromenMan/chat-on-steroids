@@ -127,7 +127,25 @@ app.whenReady().then(async () => {
     // first: an empty Enter, then the command typed but never sent (macOS CI, 2026-10-03). Send
     // Return only once the shell has echoed the text.
     await until(`(outputs[${JSON.stringify(first)}]||'').replace(/\\x1b\\[[0-9;?]*[ -\\/]*[@-~]/g,'').includes('persisted')`);
-    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+    if (WINDOWS) {
+      // On Windows this Electron build accepts insertText but drops sendInputEvent's
+      // Return before it produces a DOM key event. Dispatch through Chromium to this
+      // owned window; xterm, IPC, ConPTY and the command-output assertions stay real.
+      const input = win.webContents.debugger;
+      input.attach('1.3');
+      try {
+        await input.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13,
+          text: '\r', unmodifiedText: '\r'
+        });
+        await input.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13
+        });
+      } finally { input.detach(); }
+    } else {
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+    }
     await until(`outputs[${JSON.stringify(first)}]?.includes('PROOF_persisted_child')`);
     assert.ok(await js(`(()=>{const tab=document.querySelector('#workspaceTerminal .terminal-tab').getBoundingClientRect();const plus=document.querySelector('#workspaceTerminal .work-dock-add summary').getBoundingClientRect();return plus.left-tab.right<=12&&plus.left>=tab.right})()`));
     await js("document.querySelector('#workspaceTerminal .work-dock-add summary').click()");

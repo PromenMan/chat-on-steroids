@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { openProfileWebLink } from '../profile-web-link.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ToolSchema } from '@modelcontextprotocol/core';
@@ -91,7 +92,7 @@ const boundedFetch: typeof fetch = async (input, init) => {
 /** Installation policy owns connections; lifecycle mutations serialize per installation. */
 export class PluginManager {
   constructor(private openAuthorization: (url: URL) => Promise<void> = async url => {
-    const { shell } = await import('electron'); await shell.openExternal(url.href);
+    await openProfileWebLink(url.href);
   }) {}
   private root = '';
   private records: RecordEntry[] = [];

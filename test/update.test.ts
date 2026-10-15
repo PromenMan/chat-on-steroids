@@ -814,6 +814,9 @@ describe('a check or download that goes wrong on a bad connection', () => {
     expect(online.asked).toEqual([]);
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => expect(updateStatus().checkedAt).not.toBeNull());
+    // checkedAt proves the release lookup, not that its download has finished. Join
+    // the retry before advancing its timers or replacing the next test's fetch mock.
+    await checkForUpdates();
     expect(updateStatus().error).toBeNull();
     const calls = online.asked.length;
     await vi.advanceTimersByTimeAsync(60 * 60_000);
@@ -838,5 +841,16 @@ describe('a check or download that goes wrong on a bad connection', () => {
     expect(updateStatus()).toMatchObject({ stage: 'failed', latest: NEXT });
     expect(updateStatus().error).toContain('no data for 60 seconds');
   });
+});
+
+it('leaves updater checks to the owning Documents app in its bundled runtime', async () => {
+  vi.stubEnv('FELDMAN_DOCUMENTS_RUNTIME_DIR', 'documents-runtime');
+  try {
+    const { fetch } = github();
+    startUpdateChecks();
+    await checkForUpdates();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(updateStatus().stage).toBe('idle');
+  } finally { vi.unstubAllEnvs(); }
 });
 
