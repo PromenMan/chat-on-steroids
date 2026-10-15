@@ -1,4 +1,5 @@
 import { nextWorkerArchive, settleWorkerArchive } from './worker-archive.js';
+import { considerTurnRotation, type RotationDeps } from './turn-rotation.js';
 import { conversationProgress } from './session/progress.js';
 import { cosSignInTransfer, SignInTransferError } from './cos-browser/sign-in-transfer.js';
 import { externalBrowserProof, noteExternalInstalled, noteExternalSignedIn, resetBrowserProofForTests } from './browser-proof.js';
@@ -19,7 +20,7 @@ import { injectedUserMessage, recordedRequestTurn, responseTurnId, type Timeline
 import type { SessionSummary } from '../shared/session.js';
 import { messageReferences } from '../shared/session.js';
 import { turnTrace } from '../shared/turn-trace.js';
-import { publishBrowserDecision, authorizeBrowserInput, sessionInputPolicy, collectRecordedBrowserDecision, type InputActivity } from './session/input.js';
+import { publishBrowserDecision, authorizeBrowserInput, sessionInputPolicy, collectRecordedBrowserDecision, fileRotationInput, type InputActivity } from './session/input.js';
 import { authorizedPluginRefreshPublications, hasRequestedPluginRefresh, pendingPluginRefreshes, claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh } from './plugin-refresh.js';
 import { attachBrowserWake, wakeBrowserWork } from './browser-wake.js';
 import { tunnelRouteSettling } from './tunnel/route-settle.js';
@@ -653,6 +654,17 @@ function staleCompanion(req: http.IncomingMessage): boolean {
   return current !== undefined && Date.now() - current < STALE_COMPANION_WINDOW_MS;
 }
 /**
+ * #1516: while the built-in browser is chosen and present, a browser extension elsewhere (Chrome
+ * still open with the extension) takes no new work: every new chat opened a tab there. It keeps
+ * recording and stopping what the person opens in it. Without the built-in browser it works on.
+ */
+function notChosenBrowser(req: http.IncomingMessage): boolean {
+  return getConfig().ui.chatBrowser === 'cos' && req.headers['x-extension-host'] !== 'cos' && cosExtensionPresent();
+}
+function chosenBuiltInBrowser(req: http.IncomingMessage): boolean {
+  return getConfig().ui.chatBrowser === 'cos' && req.headers['x-extension-host'] === 'cos';
+}
+/**
  * Which browser a companion request comes from. Every browser shares one pairing token, so each
  * extension sends its own random id; requests without one (older builds) are not told apart.
  */
@@ -782,7 +794,9 @@ function takeFollow(browser: string | null): string | null {
 }
 
 /** An input goes to the browser holding its chat or, when none does, to the first one handed it. */
-function inputHeldElsewhere(input: { id: string; conversationId: string | null }, browser: string | null): boolean {
+function inputHeldElsewhere(input: { id: string; conversationId: string | null }, browser: string | null, chosen = false): boolean {
+  // The chosen built-in browser takes work over from a browser that is not chosen (#1516).
+  if (chosen) { if (browser && !input.conversationId) openingCustody.set(input.id, browser); return false; }
   if (input.conversationId && chatHolders(input.conversationId).length > 0) return chatHeldElsewhere(input.conversationId, browser);
   return openingHeldElsewhere(input.id, browser);
 }
@@ -1005,7 +1019,8 @@ function externalExtensionStatus(): BridgeStatus['externalExtension'] {
     signedIn: externalExtensionPresent() && externalExtension?.loginAt != null && Date.now() - externalExtension.loginAt < BROWSER_PRESENT_MS
       ? externalExtension.signedIn ?? null : null,
     proof: proof && { version: proof.version, signedIn: proof.signedIn },
-    ...(externalExtension?.engine ? { engine: externalExtension.engine } : {})
+    ...(externalExtension?.engine ? { engine: externalExtension.engine } : {}),
+    ...(externalExtension?.chatgptAccess !== undefined && externalExtensionPresent() ? { chatgptAccess: externalExtension.chatgptAccess } : {})
   };
 }
 
@@ -1028,7 +1043,7 @@ export function browserWakeConnected(): boolean { return browserWake?.connected(
  * Version observations do not grant presence. Old peers without a host header are unknown:
  * an older built-in worker also lacks that header and must not complete external Setup.
  */
-let externalExtension: { seenAt: number | null; version: string | null; browserId?: string; signedIn?: boolean | null; loginAt?: number; engine?: 'gecko' } | null = null;
+let externalExtension: { seenAt: number | null; version: string | null; browserId?: string; signedIn?: boolean | null; loginAt?: number; engine?: 'gecko'; chatgptAccess?: boolean } | null = null;
 
 /** The CoS browser's own copy of the extension, last heard from: its sign-in step needs it connected. */
 let cosExtensionSeenAt: number | null = null;
@@ -1043,6 +1058,23 @@ function externalExtensionPresent(): boolean {
   return server !== null && externalExtension?.seenAt != null && Date.now() - externalExtension.seenAt < BROWSER_PRESENT_MS;
 }
 
+/**
+ * Whether the external browser on record should stay the one Setup shows, over this request's.
+ *
+ * With Chrome and Firefox both connected, Setup showed whichever polled last rather than the
+ * browser chosen for ChatGPT (VM, 2026-10-14). The chosen kind keeps the record while it is
+ * present: Firefox's add-on says `gecko`, Chromium's copies say nothing, and Chrome, Edge and
+ * Brave cannot be told apart, so between those the last one still wins.
+ */
+function keepsExternalRecord(req: http.IncomingMessage): boolean {
+  const browserId = browserOf(req) ?? undefined;
+  if (!externalExtension || !externalExtensionPresent() || externalExtension.browserId === browserId) return false;
+  const chosen = getConfig().ui.chatBrowser;
+  if (chosen === 'cos') return false;
+  const fits = (gecko: boolean) => (chosen === 'firefox') === gecko;
+  return fits(externalExtension.engine === 'gecko') && !fits(req.headers['x-extension-engine'] === 'gecko');
+}
+
 function noteExternalExtension(req: http.IncomingMessage): boolean {
   if (req.headers['x-extension-host'] === 'cos') {
     const appeared = !cosExtensionPresent();
@@ -1053,6 +1085,8 @@ function noteExternalExtension(req: http.IncomingMessage): boolean {
   const header = req.headers['x-extension-version'];
   const version = typeof header === 'string' ? header.slice(0, 32) : null;
   const browserId = browserOf(req) ?? undefined;
+  // Lasting evidence still counts for every browser; only the live record is kept for the choice.
+  if (keepsExternalRecord(req)) return browserId !== undefined && version !== null && noteExternalInstalled(browserId, version);
   const sameBrowser = browserId !== undefined && externalExtension?.browserId === browserId && externalExtensionPresent();
   const appeared = !sameBrowser || externalExtension?.version !== version;
   // Firefox runs a signed add-on it updates itself (x-extension-engine: gecko); Chromium sends none.
@@ -1228,7 +1262,7 @@ function noteExtensionVersion(req: http.IncomingMessage): void {
     if (extensionBuildSeenAt.size > 16) extensionBuildSeenAt.delete(extensionBuildSeenAt.keys().next().value!);
   }
   if (typeof version !== 'string') return warnProtocol(protocol);
-  const externalChanged = req.headers['x-extension-host'] === 'browser' && externalExtension?.version !== version.slice(0, 32);
+  const externalChanged = req.headers['x-extension-host'] === 'browser' && externalExtension?.version !== version.slice(0, 32) && !keepsExternalRecord(req);
   if (externalChanged) externalExtension = { version: version.slice(0, 32), seenAt: null };
   extensionVersion = version.slice(0, 32);
   const key = `${extensionVersion}\u0000${stamp ?? ''}`;
@@ -2501,7 +2535,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     let revealRequested = false;
     let imageExportRequested = false;
     if (req.method === 'POST') {
-      const body = await readBody(req) as { openConversations?: unknown; stalledConversations?: unknown; updateHold?: unknown; canReveal?: unknown; canExportImages?: unknown; chatGptSignedIn?: unknown };
+      const body = await readBody(req) as { openConversations?: unknown; stalledConversations?: unknown; updateHold?: unknown; canReveal?: unknown; canExportImages?: unknown; chatGptSignedIn?: unknown; chatgptAccess?: unknown };
       if (!Array.isArray(body?.openConversations) || body.openConversations.length > 10_000 || body.openConversations.some(id => !conversationId(id))) {
         return json(res, 400, { error: 'invalid_open_conversations' }, origin);
       }
@@ -2516,6 +2550,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       imageExportRequested = body.canExportImages === true;
       if (req.headers['x-extension-host'] === 'browser' && externalExtension?.browserId !== undefined &&
           externalExtension.browserId === browserOf(req)) {
+        // Whether this browser may open chatgpt.com at all; older extensions say nothing (unknown).
+        const access = typeof body.chatgptAccess === 'boolean' ? body.chatgptAccess : undefined;
+        if (externalExtension.chatgptAccess !== access) { externalExtension.chatgptAccess = access; changed(); }
         noteExternalLogin(externalExtension.browserId, typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null);
       }
     }
@@ -2555,8 +2592,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (canReveal) revealBrowsers.set(browser ?? '', Date.now());
     const follow = canReveal ? takeFollow(browser) : null;
     if (req.method === 'POST' && imageExportRequested) imageExportBrowsers.set(browser ?? '', Date.now());
-    const pendingInputs = await pendingBrowserInputs();
-    const pendingIds = new Set(pendingInputs.map(input => input.id));
+    const otherBrowser = notChosenBrowser(req), chosenBuiltIn = chosenBuiltInBrowser(req);
+    const pendingInputs = otherBrowser ? [] : await pendingBrowserInputs();
+    const pendingIds = new Set((await pendingBrowserInputs()).map(input => input.id));
     for (const id of openingCustody.keys()) if (!pendingIds.has(id)) openingCustody.delete(id);
     return json(
       res,
@@ -2565,21 +2603,21 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         ok: true,
         conversations: live,
         stopTurns: await pendingStopCommands(),
-        modelCatalogRequest: pendingChatModelRequest(),
+        modelCatalogRequest: otherBrowser ? null : pendingChatModelRequest(),
         // This install's connector names, so the extension recognizes exactly its own traffic.
         connectorNames: connectorNames(getConfig().connectorSuffix),
         // Apps proven to be this install's connectors, so a renamed connector is still recognized.
         connectorApps: Object.fromEntries(Object.entries(connectorApps()).map(([surface, apps]) =>
           [surface, apps.map(({ appId, linkId, name }) => ({ appId, linkId, name }))])),
-        pluginRefreshRequests: (await authorizedPluginRefreshPublications(getConfig().ui.autoRefreshPlugins === true)).map(({ surface, schemaId, connectorName }) => ({ surface, schemaId, connectorName })),
+        pluginRefreshRequests: otherBrowser ? [] : (await authorizedPluginRefreshPublications(getConfig().ui.autoRefreshPlugins === true)).map(({ surface, schemaId, connectorName }) => ({ surface, schemaId, connectorName })),
         browserPreferenceRequest: pendingBrowserPreferenceRequest(),
-        projectCreateRequests: await pendingProjectCreates(),
+        projectCreateRequests: otherBrowser ? [] : await pendingProjectCreates(),
         inputOpeningIds: inputRows.filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).map(row => row.id),
         // A message for the running turn goes in while a call runs: ChatGPT keeps that call's result (#1231).
         // An existing chat waits out a new tunnel-client's takeover, or its next call waits ~2 min (#1220).
         inputs: [...pendingInputs.filter(input => (!input.conversationId || input.directTurn || runningToolCalls(input.conversationId) === 0) &&
             (!input.conversationId || !tunnelRouteSettling()) &&
-            !inputHeldElsewhere(input, browser)),
+            !inputHeldElsewhere(input, browser, chosenBuiltIn)),
           ...inputRows.filter(row => row.lifetime === 'temporary-planner' && ['sent', 'cancelled', 'failed'].includes(row.state))
             // After Send, ChatGPT moves a helper to /c/<id>?temporary-chat=true without its cos-input
             // marker; its chat is the only way a later close pass can find that tab again.
@@ -2594,8 +2632,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         commands: commands.length,
         // Rendering custody follows the actual command ledger, including its retirement.
         commandIds: commands.map(command => command.id),
-        revival,
-        revivals,
+        revival: otherBrowser ? null : revival,
+        revivals: otherBrowser ? [] : revivals,
         placement: pendingBrowserPlacement(null, browser),
         ...(canReveal ? { reveals: takeReveals(browser) } : {}),
         ...(follow ? { follow } : {}),
@@ -2756,8 +2794,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       return json(res, 200, { input: null }, origin);
     // As /status: an existing chat waits until a new tunnel-client has taken over its route (#1220).
     if (target && tunnelRouteSettling()) return json(res, 200, { input: null }, origin);
-    if (staleCompanion(req)) return json(res, 200, { input: null }, origin);
-    if (!target && openingHeldElsewhere(body.id, browserOf(req))) return json(res, 200, { input: null }, origin);
+    if (staleCompanion(req) || notChosenBrowser(req)) return json(res, 200, { input: null }, origin);
+    if (!target && !chosenBuiltInBrowser(req) && openingHeldElsewhere(body.id, browserOf(req))) return json(res, 200, { input: null }, origin);
     // A new chat of a project with a native ChatGPT Project is claimed only from that Project's
     // own page, which the page names; the root or another Project is never its destination.
     if (!target) {
@@ -2770,7 +2808,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   if (route === '/repairs/claim' && req.method === 'POST') {
-    if (staleCompanion(req)) return json(res, 200, { allowed: false }, origin);
+    if (staleCompanion(req) || notChosenBrowser(req)) return json(res, 200, { allowed: false }, origin);
     let body: unknown;
     try { body = await readBody(req); } catch { return json(res, 400, { error: 'bad_request' }, origin); }
     const token = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>).token : null;
@@ -4437,6 +4475,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // synced history entry is worth nothing on its own.
   if (route === '/commands/redeem' && req.method === 'POST') {
     if (staleCompanion(req)) return json(res, 409, { error: 'stale_extension_build' }, origin);
+    if (notChosenBrowser(req)) return json(res, 409, { error: 'not_chosen_browser' }, origin);
     let body: Record<string, unknown>;
     try {
       body = (await readBody(req)) as Record<string, unknown>;
@@ -9277,6 +9316,25 @@ function retireSpentRepairs(): void {
  * out is kept until exactly this line runs, so that a reload which did not help is not repeated
  * — see `retireSpentRepairs`. This call is the proof that it did help.
  */
+/** When each running turn started, read once per turn from its own `turn_start`. */
+const turnStarts = new Map<string, number>();
+const turnRotationDeps: RotationDeps = {
+  now: () => Date.now(),
+  minutes: () => getConfig().ui.rotateTurnMinutes ?? 30,
+  turnStartedAt: async (sessionId, turnId) => {
+    const key = `${sessionId}\u0000${turnId}`;
+    const known = turnStarts.get(key);
+    if (known !== undefined) return known;
+    const [start] = await readRecentEvents(sessionId, 1, { kinds: ['turn_start'] });
+    if (start?.turnId !== turnId) return null;
+    turnStarts.set(key, start.time);
+    if (turnStarts.size > 500) turnStarts.delete(turnStarts.keys().next().value!);
+    return start.time;
+  },
+  file: (sessionId, turnId) => fileRotationInput(sessionId, turnId),
+  log: message => logInfo(message)
+};
+
 function noteCallAttribution(
   conversationId: string | null,
   sessionId: string,
@@ -9355,6 +9413,14 @@ function noteCallAttribution(
       goalPendingReplyFor(conversationId)?.silenceSourceTurnId ?? filedSession?.finishTurn?.turnId ?? null;
     grantActivity(conversationId, sessionId, continuingMcp ? Date.now() : pro ? Math.min(Date.now(), startedAt) : Date.now(), CHAT_SILENCE_MS,
       { turnId: sourceTurnId, model: pro ? 'pro' : previous?.model ?? 'unknown', mcpBacked: true });
+    // #1402: a long turn continues in a fresh one, right after this tool result. Pro thinks long on
+    // purpose; a worker's or helper's turn end is its report, and Goal/Loop decide on turn ends.
+    if (!pro && sourceTurnId && filedSession?.activeTurnId === sourceTurnId &&
+        filedSession.origin?.kind !== 'worker' && filedSession.origin?.kind !== 'helper' &&
+        !isWorkerConversation(conversationId) && !goalArmedFor(conversationId)) {
+      void considerTurnRotation(conversationId, sessionId, sourceTurnId, turnRotationDeps)
+        .catch(error => logWarn(`turn rotation: ${String(error)}`));
+    }
     // Exact calls are visible work even without a page. They cannot turn that
     // display into a worker wake, browser repair or continuation after departure.
     if (filedSession?.browserRecoveryDismissedAt !== undefined || filedSession?.endedAt !== null) return;

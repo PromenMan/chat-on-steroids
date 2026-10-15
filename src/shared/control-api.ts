@@ -383,3 +383,11 @@ export interface ControlApiCancelResult {
   /** False when the row was already cancelled or failed. `input.delivery` says whether it may have been sent. */
   cancelled: boolean;
 }
+
+export interface ControlApiStopResult {
+  /**
+   * The chat right after the request. `stopPending` is true until the browser presses Stop or the
+   * request expires; only the recorded `turn_end` proves the answer ended.
+   */
+  live: ControlApiLive;
+}

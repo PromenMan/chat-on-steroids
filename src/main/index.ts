@@ -103,7 +103,8 @@ import {
 import { runShutdownSequence } from './shutdown.js';
 import { startAgentRuntimeGc, stopAgentRuntimeGc } from './runtime-gc.js';
 import { restoreManagedWorktrees } from './worktrees/index.js';
-import { applyStagedUpdate, startUpdateChecks } from './update.js';
+import { applyStagedUpdate, ELEVATION_ANSWER_MS, installingVersion, onInstallerTakeover, onUpdateHandoffStep, startUpdateChecks } from './update.js';
+import { setUpdateProgressStep, showUpdateProgress, untilInstallerTakesOver } from './update-progress.js';
 import { resumeUpdateRefresh } from './update-all.js';
 import { UI_BASE_ZOOM, windowLayoutForDisplays, windowPlacementWasMaximized, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { openInPreferredBrowser } from './browser.js';
@@ -736,6 +737,14 @@ app.on('will-quit', (event) => {
   stopInputStartup();
   tray?.destroy();
   tray = null;
+  // A person who pressed Restart and install sees what happens until the installer takes over;
+  // the main window is already gone here (2.1.38).
+  const installing = installingVersion();
+  if (installing) {
+    onUpdateHandoffStep(setUpdateProgressStep);
+    onInstallerTakeover(() => untilInstallerTakesOver());
+    showUpdateProgress(installing);
+  }
 
   void runShutdownSequence(
     [
@@ -764,7 +773,9 @@ app.on('will-quit', (event) => {
       // staged update is handed to the platform's installer here, so the next start of the app
       // is the new version. Nothing is staged unless it downloaded whole and matched the
       // release's published SHA-256, and applying it cannot fail loudly - see update.ts.
-      { name: 'update handoff', budgetMs: 5_000, run: () => [applyStagedUpdate()] }
+      // An install folder that needs an administrator waits here for Windows' permission prompt
+      // (#1492); exiting earlier would end that prompt with the app. Other handoffs take moments.
+      { name: 'update handoff', budgetMs: ELEVATION_ANSWER_MS + 5_000, run: () => [applyStagedUpdate()] }
     ],
     {
       info: logInfo,

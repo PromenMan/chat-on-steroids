@@ -121,7 +121,9 @@ export function initBrowserSetup(actions: {
     const shownVersion = live ? observation!.version : proof?.version ?? null;
     const knownVersion = !!shownVersion && /^\d+\.\d+\.\d+$/.test(shownVersion);
     const outdated = knownVersion && isNewer(state.update.current, shownVersion!);
-    ready = state.bridge.running && state.bridge.paired && (live || proof !== null) && knownVersion && !outdated;
+    // A paired external extension can still lack permission to run on ChatGPT.
+    const blocked = live && observation?.chatgptAccess === false;
+    ready = state.bridge.running && state.bridge.paired && (live || proof !== null) && knownVersion && !outdated && !blocked;
     if (state.documentsRuntime) {
       ready = state.bridge.running && state.bridge.cosExtension?.present === true;
       phase = 'location';
@@ -158,6 +160,7 @@ export function initBrowserSetup(actions: {
     paintInstallSteps(label);
     ui($('setupExternalLabel'), 'textContent', () => t('Use {0} and your existing profile.', [label]));
     ui($('extensionStatus'), 'textContent', () => ready ? (live ? t('Extension connected and up to date') : t('Extension installed and up to date'))
+      : blocked ? t('The extension may not open ChatGPT')
       : outdated ? t('Update your extension')
       : live && !knownVersion ? t('Extension version could not be verified')
       : t('Waiting for the browser extension'));
@@ -165,6 +168,7 @@ export function initBrowserSetup(actions: {
     ui($('extensionSetupDetail'), 'textContent', () => ready ? ''
       : !state.secureStorage?.available && state.secureStorage ? t('Secure credential storage is unavailable, so the extension cannot pair safely.')
       : !state.bridge.running ? t('Browser bridge could not start: {0}', [state.bridge.error ?? t('Not connected yet')])
+      : blocked ? t('{0} keeps the extension off chatgpt.com. In the extension’s details, allow it on chatgpt.com (“Site access” in Chrome, Edge and Brave, “Permissions” in Firefox), then reload ChatGPT.', [label])
       : outdated || (live && !knownVersion) ? t('Load the extension from this app’s folder, then reload it in your browser.')
       : '');
     $('extensionSetupDetail').hidden = !$('extensionSetupDetail').textContent;

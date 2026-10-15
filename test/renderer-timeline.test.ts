@@ -873,6 +873,21 @@ it('identifies automatic Continue without user-task editing or reordering and ke
   expect(w.document.querySelectorAll('#finishQueue [aria-label="Edit queued task"]')).toHaveLength(2);
 });
 
+// #1402: the app's own fresh-turn continue is no one's typed message. Waiting, it shows as the
+// message it is; dropped, it raises no delivery notice, because the app tries again by itself.
+it('shows a fresh-turn continue while it waits and raises no notice when it is dropped', async () => {
+  const { w, live, append } = await boot([]);
+  const rotation: InputEntry = { id: 'fresh-turn', sessionId: summary([]).id, text: 'Continue the task from where you are.', mode: 'auto',
+    dueAt: 0, model: null, reasoningEffort: null, state: 'queued', owner: null, createdAt: 0, conversationId: 'chat-b', purpose: 'rotation' };
+  live.inputs.push(rotation);
+  await append([]);
+  expect(w.document.querySelector('#inputQueue [data-input-id="fresh-turn"]')?.textContent).toContain('Continue the task');
+  live.inputs[0] = { ...rotation, state: 'cancelled', error: 'Not sent: browser preparation timed out. This attempt was cancelled.' };
+  await append([]);
+  expect(w.document.querySelector('#inputQueue [data-input-id="fresh-turn"]')).toBeNull();
+  expect(w.document.getElementById('inputQueue')!.textContent).not.toContain('Not sent');
+});
+
 it('keeps a transport-deferred immediate upload visible with cancellation instead of an invalid task editor', async () => {
   const { w, live, append } = await boot([]);
   live.inputs.push({ id: 'native-correction', sessionId: summary([]).id, text: 'Waiting upload', mode: 'after-turn', requestedMode: 'auto',
@@ -1511,6 +1526,51 @@ it('pages project tasks as complete parent/worker groups and keeps the selected 
   expect(section().querySelector('.project-show-more')).toBeNull();
   await append([]);
   expect(section().querySelectorAll(':scope > .sess')).toHaveLength(8);
+});
+it('does not allocate hidden project chat rows on each activity refresh', async () => {
+  const project = { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', name: 'Busy project', path: '/project', createdAt: 1 };
+  const tasks = Array.from({ length: 240 }, (_, index): SessionSummary => ({
+    ...summary([]), id: `task-${index}`, conversationId: `chat-${index}`,
+    title: `Task ${index}`, projectId: project.id
+  }));
+  const { w, append } = await boot([], false, [], [project], { sessions: tasks });
+  expect(w.document.querySelectorAll('.project-group .sess')).toHaveLength(5);
+
+  // Count even detached nodes: simply inspecting the live sidebar misses the hundreds of
+  // rows allocated and discarded before the five visible project tasks are appended.
+  const created: Element[] = [];
+  const create = w.document.createElement.bind(w.document);
+  const spy = vi.spyOn(w.document, 'createElement').mockImplementation(((tag: string, options?: ElementCreationOptions) => {
+    const node = create(tag, options);
+    created.push(node);
+    return node;
+  }) as typeof w.document.createElement);
+  try { await append([]); }
+  finally { spy.mockRestore(); }
+
+  const sessionRows = created.filter(node => node.classList.contains('sess'));
+  expect(w.document.querySelectorAll('.project-group .sess')).toHaveLength(5);
+  expect(sessionRows).toHaveLength(5);
+});
+it('groups many projects without scanning the whole session list for each project', async () => {
+  let projectIdReads = 0;
+  const ids = Array.from({ length: 24 }, (_, index) => `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`);
+  const projects: LocalProject[] = ids.map((id, index) => {
+    const project = { id, name: `Project ${index}`, path: `/project-${index}`, createdAt: 1 };
+    Object.defineProperty(project, 'id', { enumerable: true, get: () => { projectIdReads++; return id; } });
+    return project;
+  });
+  const tasks = Array.from({ length: 240 }, (_, index): SessionSummary => ({
+    ...summary([]), id: `session-${index}`, conversationId: `chat-${index}`,
+    projectId: ids[index % ids.length]!
+  }));
+  const { w, append } = await boot([], false, [], projects, { sessions: tasks });
+  expect(w.document.querySelectorAll('.project-group')).toHaveLength(24);
+  projectIdReads = 0;
+  await append([]);
+  // One lookup table per paint is fine; P complete scans of N rows followed by
+  // projects.find() for every comparison multiplies CPU work while the UI is busy.
+  expect(projectIdReads).toBeLessThan(tasks.length * 12);
 });
 it('shows five project chats initially and reveals eight more per click', async () => {
   const project = { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', name: 'Paged', path: '/paged', createdAt: 1 };

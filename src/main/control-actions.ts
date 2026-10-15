@@ -1,13 +1,14 @@
 import { loadCosBrowser } from './cos-browser/selection.js';
-import { stopSessionTurn } from './bridge.js';
 import { REASONING_EFFORTS } from '../shared/session.js';
 import { attachmentSchema, stageInputAttachments } from './session/input-attachments.js';
 import path from 'node:path';
 import { z } from 'zod';
 import { serveWorkerAction } from './control-workers.js';
-import type { ControlApiCancelResult, ControlApiSendResult } from '../shared/control-api.js';
+import type { ControlApiCancelResult, ControlApiSendResult, ControlApiStopResult } from '../shared/control-api.js';
+import { stopSessionTurn } from './bridge.js';
+import type { SessionControlsView } from './bridge.js';
 import { getConfig } from './config.js';
-import { projectInput, RequestError } from './control-reads.js';
+import { projectInput, projectLive, RequestError } from './control-reads.js';
 import { logInfo } from './logger.js';
 import { deliveryProof, listInputs, sessionInputPolicy } from './session/input.js';
 import type { InputArgs, InputEntry } from './session/input.js';
@@ -17,10 +18,12 @@ import { cancelDesktopInput, sendDesktopInput } from './session/start-input.js';
 
 /**
  * The action routes of the local control API: send a message to an existing chat or start a new
- * chat with it, cancel one that has not been handed over, or delegate to the existing worker broker.
+ * chat with it, cancel one that has not been handed over, stop the answer a chat is writing, or
+ * delegate to the existing worker broker.
  *
  * There is no new send path. A message goes through `sendDesktopInput`, the same entry the
- * composer uses, and is cancelled through `cancelDesktopInput`; the outbox stays the only owner
+ * composer uses, and is cancelled through `cancelDesktopInput`. Stop goes through
+ * `stopSessionTurn`, the same entry as the app's Stop button. The outbox stays the only owner
  * of what was admitted, what was delivered and what is unknown. The caller's UUID is the outbox
  * id, so repeating it returns the row that already exists instead of sending again. What a row
  * proves about delivery comes from `deliveryProof`, never from time, text or a turn range, and a
@@ -61,7 +64,11 @@ const sendBody = z
 
 const cancelBody = z.object({}).strict();
 
+// Stop names the exact answer it ends (`live.activeTurnId`), so a late request never stops a newer one.
+const stopBody = z.object({ turnId: z.string().min(1).max(256) }).strict();
+
 const CANCEL_ROUTE = /^\/v1\/inputs\/([0-9a-f-]{36})\/cancel$/;
+const STOP_ROUTE = /^\/v1\/sessions\/([0-9a-z-]{8,64})\/stop$/;
 
 /** Every path an action can arrive on, whatever the id, so one gate can refuse them all alike. */
 export function isActionPath(route: string): boolean {
@@ -214,6 +221,28 @@ async function cancel(id: string, rawBody: unknown): Promise<ActionReply> {
   return { status: 200, body: done };
 }
 
+async function stop(sessionId: string, rawBody: unknown): Promise<ActionReply> {
+  const body = parse(stopBody, rawBody);
+  const session = await readSession(sessionId);
+  if (!session) throw new RequestError(404, 'session_not_found');
+  await controllable(sessionId);
+  if (!session.conversationId) throw new RequestError(409, 'no_chat', 'this session has no ChatGPT chat to stop');
+  if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');
+  let controls: SessionControlsView;
+  try {
+    controls = await stopSessionTurn(sessionId, body.turnId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (message === 'active_turn_changed') throw new RequestError(409, 'turn_not_running', 'the answer this turnId names is not running');
+    if (message === 'conversation_superseded' || message === 'conversation_changed') throw new RequestError(409, 'no_chat', 'this session moved to another chat');
+    throw error;
+  }
+  logInfo('control API: stop requested for session ' + sessionId + ', turn ' + body.turnId);
+  // Requested, not done: the browser presses Stop, and the recorded `turn_end` is the proof.
+  const reply: ControlApiStopResult = { live: projectLive(controls) };
+  return { status: 202, body: reply };
+}
+
 /** Undefined when the method and path are not an action. */
 export async function serveAction(method: string, route: string, body: unknown): Promise<ActionReply | undefined> {
   if (method !== 'POST') return undefined;
@@ -230,14 +259,6 @@ export async function serveAction(method: string, route: string, body: unknown):
     await browser.open(request.url, { reveal: true });
     return { status: 200, body: { opened: true } };
   }
-  const stop = /^\/v1\/sessions\/([0-9a-z-]{8,64})\/stop$/.exec(route);
-  if (stop) {
-    const request = parse(z.object({ turnId: z.string().min(1).max(256) }).strict(), body);
-    await controllable(stop[1]!);
-    if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');
-    await stopSessionTurn(stop[1]!, request.turnId);
-    return { status: 200, body: { requested: true } };
-  }
   const worker = await serveWorkerAction(method, route, body, () => {
     if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');
   });
@@ -245,5 +266,7 @@ export async function serveAction(method: string, route: string, body: unknown):
   if (route === '/v1/inputs') return send(body);
   const match = CANCEL_ROUTE.exec(route);
   if (match) return cancel(match[1]!, body);
+  const stopMatch = STOP_ROUTE.exec(route);
+  if (stopMatch) return stop(stopMatch[1]!, body);
   return undefined;
 }

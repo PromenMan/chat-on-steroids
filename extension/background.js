@@ -3190,8 +3190,13 @@ async function maintainOnce() {
     .filter((tab) => tab && (tab.discarded === true || tab.frozen === true))
     .map(conversationForTab)
     .filter(Boolean))];
+  // Without access to chatgpt.com no content script runs, so nothing on a page could ever answer:
+  // a revoked Firefox permission, or Chrome's site access "On click". The app says so in Setup.
+  const chatgptAccess = typeof chrome.permissions?.contains === 'function'
+    ? await chrome.permissions.contains({ origins: ['https://chatgpt.com/*'] }).catch(() => undefined) : undefined;
+  if (intent !== connectionEpoch || !token || disconnected) return;
   const reply = await call('/status', { method: 'POST', body: JSON.stringify({ openConversations, stalledConversations, canReveal: true, canExportImages: true,
-    chatGptSignedIn: chatGptSignedInState,
+    chatGptSignedIn: chatGptSignedInState, ...(typeof chatgptAccess === 'boolean' ? { chatgptAccess } : {}),
     ...(extensionUpdateHold ? { updateHold: extensionUpdateHold } : {}) }) });
   if (intent !== connectionEpoch || !token || disconnected) return;
   if (!reply.ok || !reply.data) { await activeTabs?.revoke(); return; }
@@ -4875,6 +4880,10 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
     const rendering = activeTabs?.owns(id);
     void sameDocument.then(async same => {
       if (documentId && tabDocuments[String(id)] !== documentId) return;
+      // The page's own once-a-second check can run far less often in a hidden tab (Firefox's
+      // minimized window for app-opened chats, 2026-10-15); a Send waiting there on its new
+      // chat's address learns it now. Messages reach such a page at once; its timers do not.
+      if (same) void tabReply(id, { type: 'clf-route-changed' }, { documentId }).catch(() => undefined);
       await activeTabs?.navigation(id, same ? tab : null);
       if (rendering && same) return maintain(true);
     }).catch(() => undefined);
