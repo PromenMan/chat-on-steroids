@@ -53,7 +53,7 @@ function certificate() {
   return { key: fs.readFileSync(key), cert: fs.readFileSync(cert) };
 }
 
-/** chatgpt.com and auth.openai.com as far as sign-in goes. Google must never be requested. */
+/** Synthetic providers only: the normal CoS handoff never requests Google; Documents may show its refusal. */
 function sites(seen) {
   const page = body => `<!doctype html><meta charset="utf-8"><title>ChatGPT</title>
     <body style="margin:0;font:16px system-ui;background:#212121;color:#fff;display:grid;place-items:center;height:100vh">${body}</body>`;
@@ -62,18 +62,40 @@ function sites(seen) {
     seen.push({ host, path: req.url, session: (req.headers.cookie || '').includes(`${SESSION_COOKIE}=${SYNTHETIC_TOKEN}`) });
     if (host === 'auth.openai.com' && req.url === '/google') {
       res.writeHead(302, { location: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=fixture' }).end();
+    } else if (host === 'accounts.google.com') {
+      res.writeHead(403, { 'content-type': 'text/html' }).end(page('<p id="provider-denied">Synthetic provider refused embedded sign-in</p>'));
     } else if (host === 'chatgpt.com' && req.url === '/auth/login') {
       // Light, like ChatGPT's own login: whatever covers it must still let it show through.
       res.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html><meta charset="utf-8"><title>ChatGPT</title>
         <body style="margin:0;font:15px system-ui;background:#fff;color:#0d0d0d;display:grid;place-items:center;height:100vh">
         <div style="display:grid;gap:12px;width:320px;text-align:center"><h1 style="font-size:30px;margin:0 0 12px">Welcome back</h1>
-        <div style="border:1px solid #ccc;border-radius:999px;padding:14px">Email address</div>
-        <div style="background:#0d0d0d;color:#fff;border-radius:999px;padding:14px">Continue</div>
+        <form id="email-login" method="post" action="/auth/simulation" style="display:grid;gap:12px">
+        <small>Local sign-in simulation. No real account.</small>
+        <input id="email" name="email" type="email" required placeholder="Email address" style="padding:14px;border-radius:24px;border:1px solid #ccc">
+        <input id="password" name="password" type="password" required placeholder="Simulation password" style="padding:14px;border-radius:24px;border:1px solid #ccc">
+        <button style="background:#0d0d0d;color:#fff;border-radius:999px;padding:14px">Continue</button></form>
         <a id="google" href="https://auth.openai.com/google" style="border:1px solid #ccc;border-radius:999px;padding:14px;color:#0d0d0d;text-decoration:none">Continue with Google</a></div>`);
+    } else if (host === 'chatgpt.com' && req.url === '/auth/simulation' && req.method === 'POST') {
+      let body = '';
+      req.on('data', data => { body += data; if (body.length > 4096) req.destroy(); });
+      req.on('end', () => {
+        const values = new URLSearchParams(body);
+        if (values.get('email') === 'google-route@example.invalid') {
+          res.writeHead(303, { location: 'https://auth.openai.com/google' }).end();
+          return;
+        }
+        if (values.get('email') !== 'simulation@example.invalid' || values.get('password') !== 'simulation-only') {
+          res.writeHead(401, { 'content-type': 'text/html' }).end(page('<p id="denied">Simulated sign-in rejected</p>'));
+          return;
+        }
+        res.writeHead(303, { location: '/', 'set-cookie': `${SESSION_COOKIE}=${SYNTHETIC_TOKEN}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=86400` }).end();
+      });
+    } else if (host === 'chatgpt.com' && req.url === '/auth/logout') {
+      res.writeHead(303, { location: '/', 'set-cookie': `${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0` }).end();
     } else if (host === 'chatgpt.com' && req.url === '/') {
       const signedIn = seen.at(-1).session;
       res.writeHead(200, { 'content-type': 'text/html' }).end(page(`<meta name="state" id="state" content="${signedIn ? 'signed-in' : 'signed-out'}">
-        <div style="display:grid;gap:22px;justify-items:center;width:min(720px,90vw)"><h2 style="font-weight:400;margin:0">${signedIn ? 'Por onde começamos?' : 'Entrar'}</h2>
+        <div style="display:grid;gap:22px;justify-items:center;width:min(720px,90vw)"><h2 style="font-weight:400;margin:0">${signedIn ? 'Por onde começamos?' : 'Entrar'}</h2><p>Local sign-in simulation — ${signedIn ? 'signed in as simulation@example.invalid' : 'signed out'}</p>
         <div style="width:100%;height:56px;border-radius:28px;background:#303030"></div></div>`));
     } else res.writeHead(404).end();
   });
@@ -253,12 +275,56 @@ app.whenReady().then(async () => {
   await popup.executeJavaScript(`document.getElementById('google').click()`, true);
   await waitFor('Documents sign-in redirect request', () =>
     seen.filter(request => request.host === 'auth.openai.com' && request.path === '/google').length > redirectsBeforeDocuments);
-  await waitFor('Documents email login after the blocked Google redirect', () =>
-    popup.getURL() === 'https://chatgpt.com/auth/login' && !popup.isLoading());
+  await waitFor('Documents showing the identity provider result', async () =>
+    popup.getURL().startsWith('https://accounts.google.com/') && !popup.isLoading() &&
+    await popup.executeJavaScript(`!!document.getElementById('provider-denied')`));
   assert.equal(host.signIn, null, 'Documents offered an external browser');
   assert.equal(launched.length, launchesBeforeDocuments, 'Documents launched an external browser');
   assert.equal(cosSignInTransfer.pending(), null, 'Documents created an external sign-in offer');
-  assert.equal(seen.filter(request => request.host === 'accounts.google.com').length, 0);
+  assert.ok(seen.some(request => request.host === 'accounts.google.com'));
+
+  // Submit a synthetic email form through the production Documents browser. The local TLS
+  // provider owns acceptance/cookie issuance; no transfer API or manually inserted cookie.
+  await ses.cookies.remove('https://chatgpt.com/', SESSION_COOKIE);
+  const openLogin = async () => {
+    await popup.loadURL('https://chatgpt.com/auth/login');
+    await waitFor('the simulated email form', () => !popup.isLoading());
+  };
+  const submit = (password, email = 'simulation@example.invalid') => popup.executeJavaScript(`
+    document.getElementById('email').value = ${JSON.stringify(email)};
+    document.getElementById('password').value = ${JSON.stringify(password)};
+    document.getElementById('email-login').requestSubmit();`, true);
+  await openLogin();
+  await submit('simulation-only', 'google-route@example.invalid');
+  await waitFor('email discovery reaching the identity provider without a login reset', async () =>
+    popup.getURL().startsWith('https://accounts.google.com/') && !popup.isLoading() &&
+    await popup.executeJavaScript(`!!document.getElementById('provider-denied')`));
+  await openLogin();
+  // Navigating away before submitting cannot create a session.
+  await popup.loadURL('https://chatgpt.com/');
+  assert.equal(await popup.executeJavaScript(`document.getElementById('state').content`), 'signed-out');
+  await openLogin();
+  await submit('invalid');
+  await waitFor('the rejected simulated login', async () => !popup.isLoading() &&
+    await popup.executeJavaScript(`!!document.getElementById('denied')`));
+  assert.equal((await ses.cookies.get({ name: SESSION_COOKIE })).length, 0);
+  await openLogin();
+  await submit('simulation-only');
+  await waitFor('the accepted simulated email login', async () => popup.getURL() === 'https://chatgpt.com/' && !popup.isLoading() &&
+    await popup.executeJavaScript(`document.getElementById('state')?.content`) === 'signed-in');
+  const issued = (await ses.cookies.get({ name: SESSION_COOKIE }))[0];
+  assert.equal(issued.httpOnly, true);
+  assert.equal(issued.secure, true);
+  await ses.cookies.flushStore();
+  await popup.loadURL('https://chatgpt.com/');
+  assert.equal(await popup.executeJavaScript(`document.getElementById('state').content`), 'signed-in');
+  assert.equal(await popup.executeJavaScript(`document.cookie.includes(${JSON.stringify(SESSION_COOKIE)})`), false);
+  screenshots.push(await captureWindow(host, '5-documents-simulated-email-sign-in'));
+  await popup.loadURL('https://chatgpt.com/auth/logout');
+  assert.equal(await popup.executeJavaScript(`document.getElementById('state').content`), 'signed-out');
+  assert.equal((await ses.cookies.get({ name: SESSION_COOKIE })).length, 0);
+  assert.equal(launched.length, launchesBeforeDocuments);
+  assert.equal(cosSignInTransfer.pending(), null);
   delete process.env.FELDMAN_DOCUMENTS_RUNTIME_DIR;
   host.stop();
   siteServer.close();
@@ -326,7 +392,8 @@ app.whenReady().then(async () => {
     'nothing launched before the choice; one launch and one offer after it',
     'transfer imports an httpOnly secure cookie, closes the panel and ChatGPT receives the session',
     'Google popup tab gets ChatGPT login under the card, kept on cancel',
-    'Documents Google redirect returns to email login without external browser or transfer offer',
+    'Documents Google and email-discovery redirects preserve the provider refusal without reset or external browser',
+    'Documents synthetic email form: cancellation, rejection, acceptance, secure HttpOnly cookie, reload and logout',
     'English permission denial', 'Portuguese transfer receipt', 'popup wrapping'], screenshots }));
   app.exit(0);
 }).catch(error => { clearTimeout(deadline); console.error(error.stack); app.exit(1); });

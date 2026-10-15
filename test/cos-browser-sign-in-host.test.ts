@@ -33,6 +33,7 @@ const { cosSignInTransfer } = await import('../src/main/cos-browser/sign-in-tran
 const { cosBrowserSignedIn, setCosBrowserSignedIn, onCosBrowserSignInChange } = await import('../src/main/cos-browser/sign-in.js');
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   cosSignInTransfer.cancel();
   native.open.mockReset();
   native.open.mockImplementation(async () => 'edge');
@@ -78,6 +79,34 @@ function browserFixture(url = 'https://auth.openai.com/log-in') {
 /** The last state the panel page was sent. */
 const panelState = (panel = native.panels.at(-1)!) => panel.webContents.send.mock.calls.at(-1)?.[1];
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+it('lets Documents sign-in redirects reach the provider instead of resetting email login', () => {
+  vi.stubEnv('FELDMAN_DOCUMENTS_RUNTIME_DIR', 'documents-test-runtime');
+  const { host, contents } = browserFixture();
+  host.wire(contents);
+  const event = { preventDefault: vi.fn(), isMainFrame: true };
+  contents.emit('will-navigate', event, 'https://accounts.google.com/v3/signin/identifier');
+  contents.emit('will-redirect', event, 'https://accounts.google.com/v3/signin/identifier');
+  expect(event.preventDefault).not.toHaveBeenCalled();
+  expect(contents.loadURL).not.toHaveBeenCalled();
+  expect(native.open).not.toHaveBeenCalled();
+  expect(native.panels).toHaveLength(0);
+});
+
+it('keeps a Documents Google sign-in popup inside the built-in browser', () => {
+  vi.stubEnv('FELDMAN_DOCUMENTS_RUNTIME_DIR', 'documents-test-runtime');
+  const { host, contents } = browserFixture();
+  host.control.createTab = vi.fn();
+  host.wire(contents);
+  const open = contents.setWindowOpenHandler.mock.calls.at(-1)![0];
+  const url = 'https://accounts.google.com/v3/signin/identifier';
+  expect(open({ url })).toEqual({ action: 'deny' });
+  expect(host.control.createTab).toHaveBeenCalledExactlyOnceWith(host.model.tab(contents.id).windowId,
+    url, { active: true, openerTabId: contents.id });
+  expect(contents.loadURL).not.toHaveBeenCalled();
+  expect(native.open).not.toHaveBeenCalled();
+  expect(native.panels).toHaveLength(0);
+});
 
 it('covers the Google tab with one CoS panel and opens only the browser the person chose', async () => {
   const { host, contents, base } = browserFixture();

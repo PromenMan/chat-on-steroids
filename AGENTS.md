@@ -2101,8 +2101,10 @@ The Feldman Documents bundle selects a separate profile with
 its forced embedded browser, disabled coding capabilities/workers/turn rotation and
 helper-PID lifetime; upstream self-updates stay off. `profile-web-link.ts` routes settings,
 recovery downloads and plugin authorization into that browser in this profile, while
-ordinary installations retain their system-browser behavior. Google sign-in returns to
-email login here instead of offering an external handoff. These rules do not change the
+ordinary installations retain their system-browser behavior. Identity-provider redirects and
+popups stay in the Documents browser, including Google's own result or embedded-browser refusal;
+they must not silently reset an email sign-in to the login page or offer an external handoff.
+These rules do not change the
 outbox, recorder or exact native answer-ownership authorities.
 
 - **Session.** One persistent partition (`persist:cos-browser`). Its windows are `BaseWindow`s
@@ -2136,7 +2138,7 @@ outbox, recorder or exact native answer-ownership authorities.
   state on start so it is ready at once. Switching away stops it and returns exactly to the
   extension path; `test/cos-browser-opt-in.test.ts` covers both states.
 
-The built-in CoS browser's Google sign-in leaves Electron: `cos-browser/host.ts` intercepts
+Outside the Documents profile, the built-in CoS browser's Google sign-in leaves Electron: `cos-browser/host.ts` intercepts
 the main-frame navigation or popup and draws one card over that tab (`cos-browser-sign-in.html`,
 transparent over the dimmed page). A login leaving for Google has already torn its page down, so
 the host reloads ChatGPT's login under the card; tab views wear the app's page color meanwhile. The card offers installed Chrome/Edge/Brave from `browser.ts`, creates the offer

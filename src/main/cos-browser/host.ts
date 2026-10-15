@@ -624,7 +624,10 @@ export class CosBrowser {
   private wire(contents: WebContents): void {
     const id = contents.id;
     const externalSignIn = (event: Electron.Event & { isMainFrame?: boolean }, url: string) => {
-      if (event.isMainFrame === false || !isGoogleSignIn(url)) return;
+      // Documents owns the whole browser flow. In particular, entering an email can redirect
+      // to its identity provider: resetting that navigation silently discards the sign-in.
+      // Let the provider render its result, including any embedded-browser restriction.
+      if (documentsRuntimeDirectory() || event.isMainFrame === false || !isGoogleSignIn(url)) return;
       event.preventDefault();
       this.googleSignIn(contents);
     };
@@ -654,7 +657,7 @@ export class CosBrowser {
       if (!this.stopping) this.model.removeTab(id);
     });
     contents.setWindowOpenHandler(({ url }) => {
-      if (isGoogleSignIn(url)) this.googleSignIn(contents);
+      if (isGoogleSignIn(url) && !documentsRuntimeDirectory()) this.googleSignIn(contents);
       else if (opensInCosBrowser(url) || documentsRuntimeDirectory() && /^https?:/i.test(url)) {
         // ChatGPT, OpenAI and sign-in links open as tabs of this browser, beside their opener.
         const windowId = this.model.tab(id)?.windowId;
@@ -678,11 +681,6 @@ export class CosBrowser {
    * the one already open. Only one sign-in runs at a time: another tab's click shows that one.
    */
   private googleSignIn(contents: WebContents): void {
-    if (documentsRuntimeDirectory()) {
-      // Never silently launch Chrome. Return to the provider's supported email sign-in.
-      void contents.loadURL(LOGIN_URL);
-      return;
-    }
     const tabId = contents.id;
     const windowId = this.model.tab(tabId)?.windowId;
     const frame = windowId === undefined ? undefined : this.frames.get(windowId);
