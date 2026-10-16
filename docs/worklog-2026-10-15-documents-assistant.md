@@ -99,7 +99,7 @@ transport is replaced. The test-owned emulator was stopped. Production authentic
 code and the previously built installer/APK were unchanged by this test-only follow-up.
 
 
-## Published desktop and standalone Android progress — 2026-10-16
+## Published desktop and standalone Android progress â€” 2026-10-16
 
 The integrated Android provider now runs the pinned companion in an app-owned Gecko browser,
 with native durable delivery/recorder receipts, observed models, account UI and reply recovery.
@@ -117,3 +117,10 @@ Current source and validation details:
 The Android Documents tool runtime is implemented, but its separate native tablet tunnel still
 needs account-side configuration and live tool acceptance. Desktop connector success does not
 verify that standalone tablet path. These source pushes do not claim a new public binary release.
+
+
+Publication validation: all 39 desktop native-account tests passed again, and the Android
+instrumentation APK compiled. Its fresh emulator run ended with a process-startup ANR before
+reporting any test results; Android's exit records also showed unrelated emulator app startup
+ANRs and substantial system resource pressure. No fresh Android instrumentation pass is claimed
+for this publication run. The earlier live tablet reply/rendering acceptance remains separate.
