@@ -75,3 +75,45 @@ Signed-in ChatGPT answer delivery and the user's physical Android device still r
 acceptance with the user's account. A build or synthetic sign-in fixture is not evidence of
 those flows. The desktop app changes remain on its local feature branch, as do Android's;
 the CoS integration branch is published in the PromenMan fork.
+
+## Simulated email sign-in follow-up
+
+The real-Electron `verify-cos-sign-in.cjs` fixture now submits an email/password form
+to its isolated local TLS provider in Documents mode. It checks cancellation before
+submission, rejected credentials, successful cookie issuance through the actual browser
+network stack, Secure/HttpOnly protection, reload persistence and logout. No transfer
+API imports the cookie for this path; no external browser launch is requested.
+The fixture passed and its captured Documents window visibly labels the simulated account.
+These are synthetic provider checks, not proof of real ChatGPT account acceptance.
+
+Downstream desktop native-account tests also exercise a real loopback callback and
+PKCE verifier, a signed test identity, encrypted-vault reopening, nonce rejection and
+cancellation without replacing existing credentials. All 143 Python tests pass.
+
+Android's three new instrumentation simulations and both existing browser checks pass
+on Android 15. They use the actual WebView form, native loopback listener, PKCE, signed
+identity verification and Android Keystore vault. Wrong state is rejected before token
+exchange; a wrong-nonce signed token preserves the previous encrypted account; closing
+the browser cancels without saving credentials. Only the test process's remote HTTP
+transport is replaced. The test-owned emulator was stopped. Production authentication
+code and the previously built installer/APK were unchanged by this test-only follow-up.
+
+
+## Published desktop and standalone Android progress — 2026-10-16
+
+The integrated Android provider now runs the pinned companion in an app-owned Gecko browser,
+with native durable delivery/recorder receipts, observed models, account UI and reply recovery.
+Live tablet checks verified a short reply and a 4,660-character calculus proof, including
+rendered equations and exact persistence in native chat history. Independent numerical checking
+agreed with the proof. Missing Send receipts, short replies without local lifecycle observations,
+and stale cancellation were repaired. The app was updated in place after a verified private
+backup; the installation preserved the library files byte for byte.
+
+Current source and validation details:
+
+- [Android implementation and acceptance](https://github.com/feldmandev/feldman-documents/tree/codex/builtin-android-assistant/docs/android-cos-host-progress.md).
+- [Desktop integration](https://github.com/feldmandev/feldman-documents-desktop/tree/codex/builtin-study-assistant).
+
+The Android Documents tool runtime is implemented, but its separate native tablet tunnel still
+needs account-side configuration and live tool acceptance. Desktop connector success does not
+verify that standalone tablet path. These source pushes do not claim a new public binary release.
