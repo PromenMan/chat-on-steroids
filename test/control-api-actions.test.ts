@@ -64,6 +64,7 @@ const startup = await import('../src/main/browser-startup.js');
 const connection = await import('../src/main/connection.js');
 const { setChatBlocked } = await import('../src/main/session/blocked-chats.js');
 const controlActions = await import('../src/main/control-actions.js');
+const chatModels = await import('../src/main/chat-models.js');
 const controlApi = await import('../src/main/control-api.js');
 const { listInputs, resetInputForTests } = input;
 
@@ -225,6 +226,7 @@ describe('with actions switched off', () => {
       const replies = [
         await post('/v1/inputs', sendBody()),
         await post('/v1/inputs', { nonsense: true }),
+        await post('/v1/models/refresh', { allowOpen: true }),
         await post('/v1/inputs/00000000-0000-4000-8000-000000000001/cancel'),
         await post('/v1/inputs/ffffffff-ffff-4fff-8fff-ffffffffffff/cancel', { anything: 1 }),
         await post('/v1/inputs/not-even-an-id/cancel'),
@@ -254,7 +256,7 @@ describe('with actions switched off', () => {
     expect(refused.status).toBe(403);
     expect(refused.continued).toBe(false);
     expect((await call('GET', '/v1/inputs')).status).toBe(200);
-    expect((await call('GET', '/v1/health')).body.actions).toEqual({ enabled: false, routes: ['POST /v1/browser/open', 'POST /v1/sessions/{id}/stop', 'POST /v1/attachments', 'POST /v1/inputs', 'POST /v1/inputs/{id}/cancel', 'POST /v1/workers/{ownerId}/spawn', 'POST /v1/workers/{ownerId}/message', 'POST /v1/workers/{ownerId}/ack'] });
+    expect((await call('GET', '/v1/health')).body.actions).toEqual({ enabled: false, routes: ['POST /v1/models/refresh', 'POST /v1/browser/open', 'POST /v1/sessions/{id}/stop', 'POST /v1/attachments', 'POST /v1/inputs', 'POST /v1/inputs/{id}/cancel', 'POST /v1/workers/{ownerId}/spawn', 'POST /v1/workers/{ownerId}/message', 'POST /v1/workers/{ownerId}/ack'] });
   });
 
   it('follows the switch on the next request without restarting the listener', async () => {
@@ -1138,6 +1140,24 @@ describe('logging', () => {
 
 
 describe('Documents host protocol', () => {
+  it('requests account model discovery through its existing owner with explicit opening authority', async () => {
+    const discovery = vi.spyOn(chatModels, 'startChatModelDiscovery').mockResolvedValue({
+      state: 'pending', requestedAt: 1, observedAt: null, models: []
+    });
+    try {
+      expect((await post('/v1/models/refresh', {})).status).toBe(202);
+      expect(discovery).toHaveBeenLastCalledWith(false);
+      expect((await post('/v1/models/refresh', { allowOpen: true })).body).toEqual({ state: 'pending', models: [] });
+      expect(discovery).toHaveBeenLastCalledWith(true);
+      const count = discovery.mock.calls.length;
+      expect((await post('/v1/models/refresh', { allowOpen: 'true' })).status).toBe(400);
+      gate.actions = false;
+      expect((await post('/v1/models/refresh', { allowOpen: true })).status).toBe(403);
+      expect(discovery).toHaveBeenCalledTimes(count);
+    } finally {
+      discovery.mockRestore();
+    }
+  });
   it('retains the requested model and effort, and refuses a changed idempotent request', async () => {
     const body = sendBody({ model: 'gpt-6', reasoningEffort: 'high' });
     expect((await post('/v1/inputs', body)).status).toBe(202);

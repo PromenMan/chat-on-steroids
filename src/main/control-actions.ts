@@ -1,4 +1,5 @@
 import { loadCosBrowser } from './cos-browser/selection.js';
+import { startChatModelDiscovery } from './chat-models.js';
 import { REASONING_EFFORTS } from '../shared/session.js';
 import { attachmentSchema, stageInputAttachments } from './session/input-attachments.js';
 import path from 'node:path';
@@ -72,7 +73,7 @@ const STOP_ROUTE = /^\/v1\/sessions\/([0-9a-z-]{8,64})\/stop$/;
 
 /** Every path an action can arrive on, whatever the id, so one gate can refuse them all alike. */
 export function isActionPath(route: string): boolean {
-  return route === '/v1/browser/open' || /^\/v1\/sessions\/[^/]+\/stop$/.test(route) || route === '/v1/attachments' || route === '/v1/inputs' || /^\/v1\/inputs\/[^/]+\/cancel$/.test(route) || /^\/v1\/workers\/[^/]+\/(spawn|message|ack)$/.test(route);
+  return route === '/v1/models/refresh' || route === '/v1/browser/open' || /^\/v1\/sessions\/[^/]+\/stop$/.test(route) || route === '/v1/attachments' || route === '/v1/inputs' || /^\/v1\/inputs\/[^/]+\/cancel$/.test(route) || /^\/v1\/workers\/[^/]+\/(spawn|message|ack)$/.test(route);
 }
 
 export interface ActionReply {
@@ -246,6 +247,12 @@ async function stop(sessionId: string, rawBody: unknown): Promise<ActionReply> {
 /** Undefined when the method and path are not an action. */
 export async function serveAction(method: string, route: string, body: unknown): Promise<ActionReply | undefined> {
   if (method !== 'POST') return undefined;
+  if (route === '/v1/models/refresh') {
+    const request = parse(z.object({ allowOpen: z.boolean().default(false) }).strict(), body);
+    if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');
+    const catalog = await startChatModelDiscovery(request.allowOpen);
+    return { status: 202, body: { state: catalog.state, models: catalog.models.map(({ id, label, efforts }) => ({ id, label, efforts })) } };
+  }
   if (route === '/v1/attachments') {
     const request = parse(z.object({ paths: z.array(z.string().min(1).max(4096).refine(path.isAbsolute)).min(1).max(20) }).strict(), body);
     if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');

@@ -4645,6 +4645,12 @@ At most `MAX_EVENT_STREAMS` (4) are open; each sends `: stream open` at once and
 1 MiB waits in its socket, or when the session is gone, always with an `end` frame naming the
 reason, and answers with `Connection: close`.
 
+`POST /v1/models/refresh` delegates to `startChatModelDiscovery`, the same account-catalog
+owner as the native Refresh button. Its optional `allowOpen` defaults to false: passive
+Documents startup observes an existing page, while an explicit refresh may open the selected
+browser. `GET /v1/models` remains an observation and never starts discovery. The action has
+the same token, Origin/Host checks, live allowActions gate and bounded queue as other actions.
+
 The action routes (`control-actions.ts`) are `POST /v1/inputs` (send a message to an existing chat,
 or without `sessionId` start a new chat with it, optionally in a `projectId`; the new session's id
 is the message id, as for the composer's New chat), `POST /v1/inputs/{id}/cancel`, and
